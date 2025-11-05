@@ -98,7 +98,7 @@ app.get("/health", (_req, res) => {
 app.get("/whoami", (_req, res) => {
   res.json({
     ok: true,
-    service: "deepl-gateway",
+    service: "tvor-ai",
     build_tag: process.env.BUILD_TAG || `manual-${new Date().toISOString()}`,
     node: process.version,
   });
