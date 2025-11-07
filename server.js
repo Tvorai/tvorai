@@ -5,17 +5,8 @@ import helmet from "helmet";
 import mysql from "mysql2/promise";
 import dotenv from "dotenv";
 
-import deeplRoutes from "./routes/deepl.js";
-import elevenRoutes from "./routes/elevenlabs.js";
-import geminiRoutes from "./routes/gemini.js";
-import heygenRoutes from "./routes/heygen.js";
-import photoAvatarRoutes from "./routes/photoAvatar.js";
-import klingRoutes from "./routes/kling.js";        // KLING V1.6 text->video
-import klingI2vRoutes from "./routes/kling_i2v.js"; // KLING V2.1 image->video
-import klingV21MasterRoutes from "./routes/kling_v21_master.js"; // KLING V2.1 Master text->video (supports 9:16)
-import klingImagineRoutes from "./routes/kling-v2-5-turbo-imagine-i2v.js";
 
-// ✅ NOVÉ: V2.5 Turbo Text→Video route
+import klingImagineRoutes from "./routes/kling-v2-5-turbo-imagine-i2v.js";
 import klingV25TurboT2VRoutes from "./routes/kling-v2-5-turbo-text-to-video.js";
 
 // Načítaj .env (lokálne). Na Renderi ide z Environment Variables.
