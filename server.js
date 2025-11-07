@@ -1,11 +1,11 @@
-// server.js — TvorAI (KLING v2.5 T2V + I2V) + kredity/DB (ESM)
+// server.js — KLING v2.5 (T2V/I2V) + kredity/DB (ESM)
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import mysql from 'mysql2/promise';
 import 'dotenv/config';
 
-// KLING routy (ponechané)
+// KLING routy (ponechaj svoje súbory v ./routes/)
 import t2vRouter from './routes/kling-v2-5-turbo-text-to-video.js';
 import i2vRouter from './routes/kling-v2-5-turbo-imagine-i2v.js';
 
@@ -115,6 +115,7 @@ app.post('/consume', async (req, res) => {
   try {
     let { wp_user_id, feature_type, credits_spent, metadata, units } = req.body || {};
 
+    // ak nie je credits_spent, dopočíta sa z PRICING
     if (!credits_spent && feature_type) {
       const computed = resolveCost(feature_type, units);
       if (computed != null) credits_spent = computed;
