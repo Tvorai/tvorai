@@ -1,5 +1,5 @@
 {
-"name": "tvorai-backend",
+"name": "tvorai",
 "version": "1.0.1",
 "type": "module",
 "main": "server.js",
