@@ -1,4 +1,19 @@
 // server.js — TvorAI (KLING v2.5 T2V + I2V) + kredity/DB
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import mysql from 'mysql2/promise';
+import 'dotenv/config';
+
+import t2vRouter from './routes/kling-v2-5-turbo-text-to-video.js';
+import i2vRouter from './routes/kling-v2-5-turbo-imagine-i2v.js';
+
+const app = express();
+app.use(helmet());
+app.use(cors());
+app.use(express.json({ limit: '10mb' }));
+
+// server.js — TvorAI (KLING v2.5 T2V + I2V) + kredity/DB
 conn.release();
 }
 } catch (err) {
