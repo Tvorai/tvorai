@@ -13,7 +13,7 @@ import i2vRouter from "./routes/kling-v2-5-turbo-imagine-i2v.js";
 // Primárne ber z ENV (Render → Environment), ale fallback na tvoje hodnoty:
 const DB_HOST_RAW = process.env.DB_HOST || "db.r6.websupport.sk:3314";
 const [DB_HOST, DB_PORT_STR] = DB_HOST_RAW.split(":");
-const DB_PORT = Number(DB_PORT_STR || "3306");
+const DB_PORT = Number(DB_PORT_STR || "3314");
 
 const dbConfig = {
   host: DB_HOST,
