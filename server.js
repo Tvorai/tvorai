@@ -379,17 +379,8 @@ app.post("/webhook/subscription-update", async (req, res) => {
 });
 
 // ===== ROUTES: AI services =======================================
-app.use("/", deeplRoutes);
-app.use("/", elevenRoutes);
-app.use("/", geminiRoutes);
-app.use("/", heygenRoutes);
-app.use("/", photoAvatarRoutes);
-app.use("/", klingRoutes);            // text->video
-app.use("/", klingI2vRoutes);         // image->video
-app.use("/", klingV21MasterRoutes);   // text->video (V2.1 Master, 9:16/1:1/16:9)
-app.use("/api", klingImagineRoutes);  // V2.5 Imagine I2V
 
-// ✅ NOVÉ: mount pre V2.5 Turbo T2V
+app.use("/api", klingImagineRoutes);  // V2.5 Imagine I2V
 app.use("/api", klingV25TurboT2VRoutes); // POST /kling-v25-t2v/generate, GET /kling-v25-t2v/status/:taskId
 
 // ===== START SERVER ==============================================
