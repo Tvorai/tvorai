@@ -25,9 +25,19 @@ const pool = mysql.createPool({
   connectionLimit: 10,
   queueLimit: 0,
   ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
 });
 app.locals.db = pool;
-// --- DB ping po štarte (ukáže, či ide spojenie) ---
+
+// --- Pool event logy (debug) ---
+pool.on('connection', (conn) => {
+  console.log('✅ New MySQL connection established');
+  conn.on('error', (err) => console.error('⚠️ MySQL connection error:', err.message));
+  conn.on('end', () => console.warn('⚠️ MySQL connection ended'));
+});
+
+// --- DB ping po štarte ---
 try {
   const [rows] = await pool.query('SELECT 1 AS ok');
   console.log('DB ping OK:', rows[0]?.ok === 1);
@@ -35,22 +45,32 @@ try {
   console.error('DB ping FAILED:', e?.message || e);
 }
 
-// --- DEBUG endpoint: overenie, že tabuľky existujú ---
+// --- Keepalive ping každé 4 minúty (Render idle fix) ---
+setInterval(async () => {
+  try {
+    await pool.query('SELECT 1');
+  } catch (e) {
+    console.warn('⚠️ Keepalive ping failed:', e.message);
+  }
+}, 1000 * 60 * 4);
+
+// --- DEBUG endpoint ---
 app.get('/debug/db', async (_req, res) => {
   try {
-    const conn = await app.locals.db.getConnection();
+    const conn = await pool.getConnection();
     try {
-      const [[u]]  = await conn.query("SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'users'");
-      const [[s]]  = await conn.query("SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'subscriptions'");
-      const [[b]]  = await conn.query("SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'credit_balances'");
+      const [[u]] = await conn.query("SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'users'");
+      const [[s]] = await conn.query("SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'subscriptions'");
+      const [[b]] = await conn.query("SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'credit_balances'");
       const [[ul]] = await conn.query("SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'usage_logs'");
       res.json({ ok: true, tables: { users: !!u.c, subscriptions: !!s.c, credit_balances: !!b.c, usage_logs: !!ul.c } });
-    } finally { conn.release(); }
+    } finally {
+      conn.release();
+    }
   } catch (e) {
     res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
 });
-
 
 // ====== MOUNT KLING ROUTERS ======
 app.use('/api/kling/v2-5/t2v', t2vRouter);
@@ -79,9 +99,9 @@ async function getOrCreateUserByWpId(conn, wp_user_id, email) {
 // ====== WEBHOOK: subscription update ======
 app.post('/webhook/subscription-update', async (req, res) => {
   const payload = req.body || {};
+  let conn;
   try {
     let { wp_user_id, email, plan_id, monthly_credit_limit, cycle_start, cycle_end, active } = payload;
-
     if (!wp_user_id || plan_id === undefined || monthly_credit_limit === undefined || !cycle_start || !cycle_end) {
       return res.status(400).json({ error: 'MISSING_FIELDS' });
     }
@@ -91,55 +111,51 @@ app.post('/webhook/subscription-update', async (req, res) => {
     monthly_credit_limit = Number(monthly_credit_limit);
     active = !!active;
 
-    const conn = await pool.getConnection();
-    try {
-      await conn.beginTransaction();
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
 
-      const userId = await getOrCreateUserByWpId(conn, wp_user_id, email);
+    const userId = await getOrCreateUserByWpId(conn, wp_user_id, email);
 
-      await conn.query(
-        `INSERT INTO subscriptions (user_id, plan_id, monthly_credit_limit, cycle_start, cycle_end, active)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-           plan_id = VALUES(plan_id),
-           monthly_credit_limit = VALUES(monthly_credit_limit),
-           cycle_start = VALUES(cycle_start),
-           cycle_end = VALUES(cycle_end),
-           active = VALUES(active)`,
-        [userId, plan_id, monthly_credit_limit, cycle_start, cycle_end, active]
-      );
+    await conn.query(
+      `INSERT INTO subscriptions (user_id, plan_id, monthly_credit_limit, cycle_start, cycle_end, active)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         plan_id = VALUES(plan_id),
+         monthly_credit_limit = VALUES(monthly_credit_limit),
+         cycle_start = VALUES(cycle_start),
+         cycle_end = VALUES(cycle_end),
+         active = VALUES(active)`,
+      [userId, plan_id, monthly_credit_limit, cycle_start, cycle_end, active]
+    );
 
-      await conn.query(
-        `INSERT INTO credit_balances (user_id, cycle_start, credits_remaining, updated_at)
-         VALUES (?, ?, ?, NOW())
-         ON DUPLICATE KEY UPDATE
-           cycle_start = VALUES(cycle_start),
-           credits_remaining = VALUES(credits_remaining),
-           updated_at = NOW()`,
-        [userId, cycle_start, monthly_credit_limit]
-      );
+    await conn.query(
+      `INSERT INTO credit_balances (user_id, cycle_start, credits_remaining, updated_at)
+       VALUES (?, ?, ?, NOW())
+       ON DUPLICATE KEY UPDATE
+         cycle_start = VALUES(cycle_start),
+         credits_remaining = VALUES(credits_remaining),
+         updated_at = NOW()`,
+      [userId, cycle_start, monthly_credit_limit]
+    );
 
-      await conn.commit();
-      res.json({ ok: true, user_id: userId });
-    } catch (e) {
-      await conn.rollback();
-      console.error('subscription-update error', e);
-      res.status(500).json({ error: 'DB_ERROR', detail: String(e?.message || e) });
-    } finally {
-      conn.release();
+    await conn.commit();
+    res.json({ ok: true, user_id: userId });
+  } catch (e) {
+    if (conn && conn.connection && conn.connection.state !== 'disconnected') {
+      await conn.rollback().catch(() => {});
     }
-  } catch (err) {
-    console.error('subscription-update outer error', err);
-    res.status(500).json({ error: 'SERVER_ERROR' });
+    console.error('subscription-update error', e);
+    res.status(500).json({ error: 'DB_ERROR', detail: String(e?.message || e) });
+  } finally {
+    if (conn) conn.release();
   }
 });
 
 // ====== CONSUME CREDITS ======
 app.post('/consume', async (req, res) => {
+  let conn;
   try {
     let { wp_user_id, feature_type, credits_spent, metadata, units } = req.body || {};
-
-    // ak nie je credits_spent, dopočíta sa z PRICING
     if (!credits_spent && feature_type) {
       const computed = resolveCost(feature_type, units);
       if (computed != null) credits_spent = computed;
@@ -149,45 +165,41 @@ app.post('/consume', async (req, res) => {
     wp_user_id = Number(wp_user_id);
     credits_spent = Math.max(0, Number(credits_spent));
 
-    const conn = await pool.getConnection();
-    try {
-      await conn.beginTransaction();
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
 
-      const [[userRow]] = await conn.query('SELECT id FROM users WHERE wp_user_id = ? LIMIT 1', [wp_user_id]);
-      if (!userRow) { await conn.rollback(); return res.status(404).json({ error: 'USER_NOT_FOUND' }); }
-      const userId = userRow.id;
+    const [[userRow]] = await conn.query('SELECT id FROM users WHERE wp_user_id = ? LIMIT 1', [wp_user_id]);
+    if (!userRow) { await conn.rollback(); return res.status(404).json({ error: 'USER_NOT_FOUND' }); }
+    const userId = userRow.id;
 
-      const [[sub]] = await conn.query('SELECT active FROM subscriptions WHERE user_id = ? LIMIT 1', [userId]);
-      if (!sub || !sub.active) { await conn.rollback(); return res.status(403).json({ error: 'SUBSCRIPTION_INACTIVE' }); }
+    const [[sub]] = await conn.query('SELECT active FROM subscriptions WHERE user_id = ? LIMIT 1', [userId]);
+    if (!sub || !sub.active) { await conn.rollback(); return res.status(403).json({ error: 'SUBSCRIPTION_INACTIVE' }); }
 
-      const [[bal]] = await conn.query('SELECT credits_remaining FROM credit_balances WHERE user_id = ? LIMIT 1', [userId]);
-      if (!bal) { await conn.rollback(); return res.status(404).json({ error: 'BALANCE_NOT_FOUND' }); }
+    const [[bal]] = await conn.query('SELECT credits_remaining FROM credit_balances WHERE user_id = ? LIMIT 1', [userId]);
+    if (!bal) { await conn.rollback(); return res.status(404).json({ error: 'BALANCE_NOT_FOUND' }); }
 
-      if (bal.credits_remaining < credits_spent) {
-        await conn.rollback();
-        return res.status(402).json({ error: 'INSUFFICIENT_CREDITS', credits_remaining: bal.credits_remaining });
-      }
-
-      await conn.query('UPDATE credit_balances SET credits_remaining = credits_remaining - ?, updated_at = NOW() WHERE user_id = ?', [credits_spent, userId]);
-      await conn.query(
-        'INSERT INTO usage_logs (user_id, feature_type, credits_spent, metadata) VALUES (?, ?, ?, CAST(? AS JSON))',
-        [userId, feature_type || 'generic', credits_spent, JSON.stringify(metadata || { units: units || 1 })]
-      );
-
-      const [[after]] = await conn.query('SELECT credits_remaining FROM credit_balances WHERE user_id = ? LIMIT 1', [userId]);
-
-      await conn.commit();
-      res.json({ ok: true, credits_remaining: after.credits_remaining });
-    } catch (e) {
+    if (bal.credits_remaining < credits_spent) {
       await conn.rollback();
-      console.error('consume error', e);
-      res.status(500).json({ error: 'DB_ERROR', detail: String(e?.message || e) });
-    } finally {
-      conn.release();
+      return res.status(402).json({ error: 'INSUFFICIENT_CREDITS', credits_remaining: bal.credits_remaining });
     }
-  } catch (err) {
-    console.error('consume outer error', err);
-    res.status(500).json({ error: 'SERVER_ERROR' });
+
+    await conn.query('UPDATE credit_balances SET credits_remaining = credits_remaining - ?, updated_at = NOW() WHERE user_id = ?', [credits_spent, userId]);
+    await conn.query(
+      'INSERT INTO usage_logs (user_id, feature_type, credits_spent, metadata) VALUES (?, ?, ?, CAST(? AS JSON))',
+      [userId, feature_type || 'generic', credits_spent, JSON.stringify(metadata || { units: units || 1 })]
+    );
+
+    const [[after]] = await conn.query('SELECT credits_remaining FROM credit_balances WHERE user_id = ? LIMIT 1', [userId]);
+    await conn.commit();
+    res.json({ ok: true, credits_remaining: after.credits_remaining });
+  } catch (e) {
+    if (conn && conn.connection && conn.connection.state !== 'disconnected') {
+      await conn.rollback().catch(() => {});
+    }
+    console.error('consume error', e);
+    res.status(500).json({ error: 'DB_ERROR', detail: String(e?.message || e) });
+  } finally {
+    if (conn) conn.release();
   }
 });
 
@@ -224,5 +236,6 @@ app.get('/usage/:wp_user_id', async (req, res) => {
 // Healthcheck
 app.get('/', (_, res) => res.send('TvorAI backend OK'));
 
+// ====== START SERVER ======
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on :${PORT}`));
+app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
