@@ -8,6 +8,7 @@ import 'dotenv/config';
 // KLING routy (ponechaj svoje súbory v ./routes/)
 import t2vRouter from './routes/kling-v2-5-turbo-text-to-video.js';
 import i2vRouter from './routes/kling-v2-5-turbo-imagine-i2v.js';
+import seedreamRouter from './routes/seedream-3-0-txt2img.js';
 
 const app = express();
 app.use(helmet());
@@ -75,11 +76,14 @@ app.get('/debug/db', async (_req, res) => {
 // ====== MOUNT KLING ROUTERS ======
 app.use('/api/kling/v2-5/t2v', t2vRouter);
 app.use('/api/kling/v2-5/i2v', i2vRouter);
+app.use('/api/seedream/3/t2i', seedreamRouter);
+
 
 // ====== PRICING (fallback) ======
 const PRICING = {
   kling_v25_i2v_imagine: 300,
   kling_v25_t2v: 320,
+  seedream_30_t2i: 120, 
 };
 function resolveCost(featureType, units = 1) {
   const base = PRICING[featureType];
