@@ -27,6 +27,30 @@ const pool = mysql.createPool({
   ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
 });
 app.locals.db = pool;
+// --- DB ping po štarte (ukáže, či ide spojenie) ---
+try {
+  const [rows] = await pool.query('SELECT 1 AS ok');
+  console.log('DB ping OK:', rows[0]?.ok === 1);
+} catch (e) {
+  console.error('DB ping FAILED:', e?.message || e);
+}
+
+// --- DEBUG endpoint: overenie, že tabuľky existujú ---
+app.get('/debug/db', async (_req, res) => {
+  try {
+    const conn = await app.locals.db.getConnection();
+    try {
+      const [[u]]  = await conn.query("SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'users'");
+      const [[s]]  = await conn.query("SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'subscriptions'");
+      const [[b]]  = await conn.query("SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'credit_balances'");
+      const [[ul]] = await conn.query("SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'usage_logs'");
+      res.json({ ok: true, tables: { users: !!u.c, subscriptions: !!s.c, credit_balances: !!b.c, usage_logs: !!ul.c } });
+    } finally { conn.release(); }
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e?.message || String(e) });
+  }
+});
+
 
 // ====== MOUNT KLING ROUTERS ======
 app.use('/api/kling/v2-5/t2v', t2vRouter);
