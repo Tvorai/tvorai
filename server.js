@@ -1,19 +1,20 @@
-// server.js — KLING v2.5 (T2V/I2V) + kredity/DB (ESM)
+// server.js — KLING v2.5 (T2V/I2V) + Seedream T2I + Merge Face + kredity/DB (ESM)
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import mysql from 'mysql2/promise';
 import 'dotenv/config';
 
-// KLING routy (ponechaj svoje súbory v ./routes/)
+// ROUTES
 import t2vRouter from './routes/kling-v2-5-turbo-text-to-video.js';
 import i2vRouter from './routes/kling-v2-5-turbo-imagine-i2v.js';
 import seedreamRouter from './routes/seedream-3-0-txt2img.js';
+import mergeFaceRouter from './routes/merge-face.js';
 
 const app = express();
 app.use(helmet());
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '20mb' })); // väčší limit kvôli base64 obrázkom
 
 // ====== DB POOL ======
 const pool = mysql.createPool({
@@ -60,9 +61,9 @@ app.get('/debug/db', async (_req, res) => {
   try {
     const conn = await pool.getConnection();
     try {
-      const [[u]] = await conn.query("SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'users'");
-      const [[s]] = await conn.query("SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'subscriptions'");
-      const [[b]] = await conn.query("SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'credit_balances'");
+      const [[u]]  = await conn.query("SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'users'");
+      const [[s]]  = await conn.query("SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'subscriptions'");
+      const [[b]]  = await conn.query("SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'credit_balances'");
       const [[ul]] = await conn.query("SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'usage_logs'");
       res.json({ ok: true, tables: { users: !!u.c, subscriptions: !!s.c, credit_balances: !!b.c, usage_logs: !!ul.c } });
     } finally {
@@ -73,17 +74,18 @@ app.get('/debug/db', async (_req, res) => {
   }
 });
 
-// ====== MOUNT KLING ROUTERS ======
+// ====== MOUNT ROUTERS ======
 app.use('/api/kling/v2-5/t2v', t2vRouter);
 app.use('/api/kling/v2-5/i2v', i2vRouter);
 app.use('/api/seedream/3/t2i', seedreamRouter);
-
+app.use('/api/novita/merge-face', mergeFaceRouter);
 
 // ====== PRICING (fallback) ======
 const PRICING = {
   kling_v25_i2v_imagine: 300,
   kling_v25_t2v: 320,
-  seedream_30_t2i: 120, 
+  seedream_30_t2i: 120,
+  novita_merge_face: 240, // 💰 nastav podľa seba
 };
 function resolveCost(featureType, units = 1) {
   const base = PRICING[featureType];
@@ -145,8 +147,8 @@ app.post('/webhook/subscription-update', async (req, res) => {
     await conn.commit();
     res.json({ ok: true, user_id: userId });
   } catch (e) {
-    if (conn && conn.connection && conn.connection.state !== 'disconnected') {
-      await conn.rollback().catch(() => {});
+    if (conn) {
+      try { await conn.rollback(); } catch {}
     }
     console.error('subscription-update error', e);
     res.status(500).json({ error: 'DB_ERROR', detail: String(e?.message || e) });
@@ -197,8 +199,8 @@ app.post('/consume', async (req, res) => {
     await conn.commit();
     res.json({ ok: true, credits_remaining: after.credits_remaining });
   } catch (e) {
-    if (conn && conn.connection && conn.connection.state !== 'disconnected') {
-      await conn.rollback().catch(() => {});
+    if (conn) {
+      try { await conn.rollback(); } catch {}
     }
     console.error('consume error', e);
     res.status(500).json({ error: 'DB_ERROR', detail: String(e?.message || e) });
@@ -217,7 +219,7 @@ app.get('/usage/:wp_user_id', async (req, res) => {
       if (!userRow) return res.status(404).json({ error: 'USER_NOT_FOUND' });
       const userId = userRow.id;
 
-      const [[sub]] = await conn.query('SELECT plan_id, monthly_credit_limit, active FROM subscriptions WHERE user_id = ? LIMIT 1', [userId]);
+      const [[sub]] = await conn.query('SELECT plan_id, monthly_credit_limit, active, cycle_end FROM subscriptions WHERE user_id = ? LIMIT 1', [userId]);
       const [[bal]] = await conn.query('SELECT credits_remaining, cycle_start FROM credit_balances WHERE user_id = ? LIMIT 1', [userId]);
 
       res.json({
@@ -227,6 +229,7 @@ app.get('/usage/:wp_user_id', async (req, res) => {
         active: sub ? !!sub.active : false,
         credits_remaining: bal ? bal.credits_remaining : 0,
         cycle_start: bal ? bal.cycle_start : null,
+        cycle_end: sub ? sub.cycle_end : null,
       });
     } finally {
       conn.release();
