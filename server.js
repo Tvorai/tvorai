@@ -85,7 +85,7 @@ const PRICING = {
   kling_v25_i2v_imagine: 300,
   kling_v25_t2v: 320,
   seedream_30_t2i: 120,
-  novita_merge_face: 240, // 💰 nastav podľa seba
+  merge_face: 240, // 💰 nastav podľa seba
 };
 function resolveCost(featureType, units = 1) {
   const base = PRICING[featureType];
