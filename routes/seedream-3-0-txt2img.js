@@ -34,7 +34,7 @@ router.post('/generate', async (req, res) => {
       size = '1024x1024',
       seed = -1,
       guidance_scale = 2.5,
-      watermark = false
+      watermark = off,
     } = req.body || {};
 
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
