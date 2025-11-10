@@ -35,7 +35,7 @@ router.post('/generate', async (req, res) => {
       size = '1024x1024',
       seed = -1,
       guidance_scale = 2.5,
-      // môže prísť 'on' | 'off' | 'true' | 'false' | 1 | 0
+      // !!! dôležité: default = 'off' (string), nie neexistujúca premenná off
       watermark: watermarkRaw = 'off',
     } = req.body || {};
 
@@ -43,29 +43,29 @@ router.post('/generate', async (req, res) => {
       return res.status(400).json({ error: "Missing or empty 'prompt'." });
     }
 
-    // validácia size ~ základ
     const sizeRe = /^(\d{3,4})x(\d{3,4})$/;
     if (!sizeRe.test(size)) {
       return res.status(400).json({ error: "Invalid 'size' (e.g., 1024x1024)." });
     }
 
-    // normalize watermark -> boolean
+    // "on/off/true/false/1/0/no" -> boolean
     const wmStr = String(watermarkRaw).trim().toLowerCase();
-    const watermark =
-      !(wmStr === 'off' || wmStr === 'false' || wmStr === '0' || wmStr === 'no');
+    const watermark = !(wmStr === 'off' || wmStr === 'false' || wmStr === '0' || wmStr === 'no');
 
-    // priprav payload podľa Novita
     const payload = {
+      // niektoré verzie čítajú prompt na top-levele, iné v input – nechávame takto,
+      prompt: String(prompt),
       model,
-      input: {
-        prompt: String(prompt),
-        size,
-        seed: typeof seed === 'number' ? seed : Number(seed ?? -1),
-        guidance_scale: Number(guidance_scale ?? 2.5),
-      },
-      // DÔLEŽITÉ: watermark patrí do `extra`
-      extra: { watermark },
       response_format,
+      size,
+      seed: typeof seed === 'number' ? seed : Number(seed ?? -1),
+      guidance_scale: Number(guidance_scale ?? 2.5),
+
+      // ak API berie watermark priamo:
+      watermark,
+
+      // a ak ho berie v extra (bežné u Novita):
+      extra: { watermark },
     };
 
     const r = await axios.post(
@@ -74,9 +74,9 @@ router.post('/generate', async (req, res) => {
       {
         headers: {
           Authorization: `Bearer ${NOVITA_API_KEY}`,
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/json'
         },
-        timeout: 60000,
+        timeout: 60000
       }
     );
 
@@ -85,20 +85,14 @@ router.post('/generate', async (req, res) => {
 
     if (response_format === 'b64_json') {
       if (!Array.isArray(b64s) || !b64s.length) {
-        return res.status(502).json({
-          error: 'NO_IMAGE_DATA',
-          detail: 'API nevrátilo binary_data_base64.',
-        });
+        return res.status(502).json({ error: 'NO_IMAGE_DATA', detail: 'API nevrátilo binary_data_base64.' });
       }
       return res.json({ ok: true, format: 'b64_json', images: b64s });
     }
 
     // default 'url'
     if (!Array.isArray(urls) || !urls.length) {
-      return res.status(502).json({
-        error: 'NO_IMAGE_URLS',
-        detail: 'API nevrátilo image_urls.',
-      });
+      return res.status(502).json({ error: 'NO_IMAGE_URLS', detail: 'API nevrátilo image_urls.' });
     }
 
     return res.json({ ok: true, format: 'url', images: urls });
