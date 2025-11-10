@@ -10,6 +10,7 @@ import express from 'express';
 import axios from 'axios';
 
 const router = express.Router();
+export default router;
 
 const NOVITA_API_KEY  = process.env.NOVITA_API_KEY;
 const NOVITA_BASE_URL = process.env.NOVITA_BASE_URL || 'https://api.novita.ai';
@@ -34,27 +35,37 @@ router.post('/generate', async (req, res) => {
       size = '1024x1024',
       seed = -1,
       guidance_scale = 2.5,
-      watermark = off,
+      // môže prísť 'on' | 'off' | 'true' | 'false' | 1 | 0
+      watermark: watermarkRaw = 'off',
     } = req.body || {};
 
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       return res.status(400).json({ error: "Missing or empty 'prompt'." });
     }
 
-    // validácia size ~ len základná (rozsah si vieš sprísniť)
+    // validácia size ~ základ
     const sizeRe = /^(\d{3,4})x(\d{3,4})$/;
     if (!sizeRe.test(size)) {
       return res.status(400).json({ error: "Invalid 'size' (e.g., 1024x1024)." });
     }
 
+    // normalize watermark -> boolean
+    const wmStr = String(watermarkRaw).trim().toLowerCase();
+    const watermark =
+      !(wmStr === 'off' || wmStr === 'false' || wmStr === '0' || wmStr === 'no');
+
+    // priprav payload podľa Novita
     const payload = {
-      prompt: String(prompt),
       model,
+      input: {
+        prompt: String(prompt),
+        size,
+        seed: typeof seed === 'number' ? seed : Number(seed ?? -1),
+        guidance_scale: Number(guidance_scale ?? 2.5),
+      },
+      // DÔLEŽITÉ: watermark patrí do `extra`
+      extra: { watermark },
       response_format,
-      size,
-      seed: typeof seed === 'number' ? seed : Number(seed ?? -1),
-      guidance_scale: Number(guidance_scale ?? 2.5),
-      watermark: Boolean(watermark),
     };
 
     const r = await axios.post(
@@ -63,9 +74,9 @@ router.post('/generate', async (req, res) => {
       {
         headers: {
           Authorization: `Bearer ${NOVITA_API_KEY}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
         },
-        timeout: 30000
+        timeout: 60000,
       }
     );
 
@@ -74,14 +85,20 @@ router.post('/generate', async (req, res) => {
 
     if (response_format === 'b64_json') {
       if (!Array.isArray(b64s) || !b64s.length) {
-        return res.status(502).json({ error: 'NO_IMAGE_DATA', detail: 'API nevrátilo binary_data_base64.' });
+        return res.status(502).json({
+          error: 'NO_IMAGE_DATA',
+          detail: 'API nevrátilo binary_data_base64.',
+        });
       }
       return res.json({ ok: true, format: 'b64_json', images: b64s });
     }
 
     // default 'url'
     if (!Array.isArray(urls) || !urls.length) {
-      return res.status(502).json({ error: 'NO_IMAGE_URLS', detail: 'API nevrátilo image_urls.' });
+      return res.status(502).json({
+        error: 'NO_IMAGE_URLS',
+        detail: 'API nevrátilo image_urls.',
+      });
     }
 
     return res.json({ ok: true, format: 'url', images: urls });
@@ -92,5 +109,3 @@ router.post('/generate', async (req, res) => {
     return res.status(status).json({ error: 'SERVER_ERROR', details });
   }
 });
-
-export default router;
