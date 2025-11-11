@@ -82,10 +82,10 @@ app.use('/api/novita/merge-face', mergeFaceRouter);
 
 // ====== PRICING (fallback) ======
 const PRICING = {
-  kling_v25_i2v_imagine: 300,
-  kling_v25_t2v: 320,
-  seedream_30_t2i: 120,
-  novita_merge_face: 240, // 💰 nastav podľa seba
+  kling_v25_i2v_imagine: 36,
+  kling_v25_t2v: 36,
+  seedream_30_t2i: 12,
+  novita_merge_face: 12, // 💰 nastav podľa seba
 };
 function resolveCost(featureType, units = 1) {
   const base = PRICING[featureType];
