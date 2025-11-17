@@ -42,7 +42,7 @@ router.post("/generate", async (req, res) => {
       size,
       sequential_image_generation = "disabled",
       max_images = 1,
-      watermark = true,
+      watermark = false,
     } = req.body || {};
 
     if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
