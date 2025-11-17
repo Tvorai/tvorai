@@ -1,90 +1,105 @@
 /**
- * Seedream 3.0 – FULL WORKING VERSION
- * === CREATE TASK + POLLING ===
+ * Route: Seedream 3.0 — Text to Image
+ * Mount: app.use('/api/seedream/3/t2i', router)
+ *
+ * Endpoints:
+ *  POST /generate  → zavolá Novita a vráti image_urls (alebo b64)
  */
 
-import express from "express";
-import axios from "axios";
+import express from 'express';
+import axios from 'axios';
 
 const router = express.Router();
 export default router;
 
-const API = process.env.NOVITA_BASE_URL || "https://api.novita.ai";
-const KEY = process.env.NOVITA_API_KEY;
+const NOVITA_API_KEY  = process.env.NOVITA_API_KEY;
+const NOVITA_BASE_URL = process.env.NOVITA_BASE_URL || 'https://api.novita.ai';
 
-function w(x) {
-  const v = String(x ?? "").toLowerCase();
-  return !(v === "off" || v === "false" || v === "0" || v === "no");
+function assertEnv () {
+  if (!NOVITA_API_KEY) {
+    const err = new Error('NOVITA_API_KEY chýba v env (Render → Environment).');
+    err.status = 500;
+    throw err;
+  }
 }
 
-router.post("/generate", async (req, res) => {
+// Bez pollingu – priamy sync POST
+router.post('/generate', async (req, res) => {
   try {
-    if (!KEY) throw new Error("Missing NOVITA_API_KEY");
+    assertEnv();
 
     const {
       prompt,
-      size = "1024x1024",
+      model = 'seedream-3-0-t2i-250415',
+      response_format = 'url',   // 'url' | 'b64_json'
+      size = '1024x1024',
       seed = -1,
       guidance_scale = 2.5,
-      watermark = "off",
-    } = req.body ?? {};
+      // !!! dôležité: default = 'off' (string), nie neexistujúca premenná off
+      watermark: watermarkRaw = 'off',
+    } = req.body || {};
 
-    if (!prompt) return res.status(400).json({ error: "NO_PROMPT" });
+    if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+      return res.status(400).json({ error: "Missing or empty 'prompt'." });
+    }
 
-    // 1️⃣ CREATE TASK
-    const create = await axios.post(
-      `${API}/v3/seedream-3-0-t2i`,
+    const sizeRe = /^(\d{3,4})x(\d{3,4})$/;
+    if (!sizeRe.test(size)) {
+      return res.status(400).json({ error: "Invalid 'size' (e.g., 1024x1024)." });
+    }
+
+    // "on/off/true/false/1/0/no" -> boolean
+    const wmStr = String(watermarkRaw).trim().toLowerCase();
+    const watermark = !(wmStr === 'off' || wmStr === 'false' || wmStr === '0' || wmStr === 'no');
+
+    const payload = {
+      // niektoré verzie čítajú prompt na top-levele, iné v input – nechávame takto,
+      prompt: String(prompt),
+      model,
+      response_format,
+      size,
+      seed: typeof seed === 'number' ? seed : Number(seed ?? -1),
+      guidance_scale: Number(guidance_scale ?? 2.5),
+
+      // ak API berie watermark priamo:
+      watermark,
+
+      // a ak ho berie v extra (bežné u Novita):
+      extra: { watermark },
+    };
+
+    const r = await axios.post(
+      `${NOVITA_BASE_URL}/v3/seedream-3-0-txt2img`,
+      payload,
       {
-        model: "seedream-3-0-t2i",
-        prompt,
-        size,
-        seed,
-        guidance_scale,
-        watermark: w(watermark),
-      },
-      {
-        headers: { Authorization: `Bearer ${KEY}` },
-        timeout: 20000,
+        headers: {
+          Authorization: `Bearer ${NOVITA_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 60000
       }
     );
 
-    const taskId = create?.data?.task_id;
-    if (!taskId) throw new Error("NO_TASK_ID");
+    const urls = r?.data?.image_urls || null;
+    const b64s = r?.data?.binary_data_base64 || null;
 
-    console.log("🎯 Seedream task:", taskId);
-
-    // 2️⃣ POLLING
-    let tries = 0;
-    let img = null;
-
-    while (tries < 25) {
-      await new Promise((r) => setTimeout(r, 1200));
-      tries++;
-
-      const poll = await axios.get(`${API}/v3/tasks/${taskId}`, {
-        headers: { Authorization: `Bearer ${KEY}` },
-      });
-
-      if (poll?.data?.status === "success") {
-        img = poll?.data?.image_urls?.[0];
-        break;
+    if (response_format === 'b64_json') {
+      if (!Array.isArray(b64s) || !b64s.length) {
+        return res.status(502).json({ error: 'NO_IMAGE_DATA', detail: 'API nevrátilo binary_data_base64.' });
       }
-
-      if (poll?.data?.status === "failed") throw new Error("TASK_FAILED");
+      return res.json({ ok: true, format: 'b64_json', images: b64s });
     }
 
-    if (!img) throw new Error("TIMEOUT");
+    // default 'url'
+    if (!Array.isArray(urls) || !urls.length) {
+      return res.status(502).json({ error: 'NO_IMAGE_URLS', detail: 'API nevrátilo image_urls.' });
+    }
 
-    return res.json({
-      ok: true,
-      image: img,
-    });
+    return res.json({ ok: true, format: 'url', images: urls });
   } catch (e) {
-    console.log("❌ SEEDREAM ERROR:", e?.response?.data || e.message);
-    res.status(500).json({
-      ok: false,
-      error: e.message,
-      raw: e?.response?.data,
-    });
+    const status = e?.status || e?.response?.status || 500;
+    const details = e?.response?.data || e?.message || 'Unknown error';
+    console.error('seedream-3-0-txt2img error:', status, details);
+    return res.status(status).json({ error: 'SERVER_ERROR', details });
   }
 });
