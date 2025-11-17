@@ -37,13 +37,13 @@ router.post("/generate", async (req, res) => {
     assertEnv();
 
     const {
-      prompt,
-      images,
-      size,
-      sequential_image_generation = "disabled",
-      max_images = 1,
-      watermark = false,
-    } = req.body || {};
+  prompt,
+  images,
+  size,
+  sequential_image_generation = "disabled",
+  max_images = 1,
+  watermark = false, // default bez watermarku
+} = req.body || {};
 
     if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
       return res.status(400).json({ ok: false, error: "MISSING_PROMPT" });
