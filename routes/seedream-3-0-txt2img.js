@@ -65,13 +65,6 @@ router.post('/generate', async (req, res) => {
 };
 
 
-      // ak API berie watermark priamo:
-      watermark,
-
-      // a ak ho berie v extra (bežné u Novita):
-      extra: { watermark },
-    };
-
     const r = await axios.post(
   `${NOVITA_BASE_URL}/v3/image/generations`,
       payload,
