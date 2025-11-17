@@ -53,13 +53,17 @@ router.post('/generate', async (req, res) => {
     const watermark = !(wmStr === 'off' || wmStr === 'false' || wmStr === '0' || wmStr === 'no');
 
     const payload = {
-      // niektoré verzie čítajú prompt na top-levele, iné v input – nechávame takto,
-      prompt: String(prompt),
-      model,
-      response_format,
-      size,
-      seed: typeof seed === 'number' ? seed : Number(seed ?? -1),
-      guidance_scale: Number(guidance_scale ?? 2.5),
+  model: "seedream-3-0-t2i-250415",
+  response_format,
+  input: {
+    prompt: String(prompt),
+    size,
+    seed: Number(seed ?? -1),
+    guidance_scale: Number(guidance_scale ?? 2.5),
+    watermark,
+  }
+};
+
 
       // ak API berie watermark priamo:
       watermark,
@@ -69,7 +73,7 @@ router.post('/generate', async (req, res) => {
     };
 
     const r = await axios.post(
-      `${NOVITA_BASE_URL}/v3/seedream-3-0-txt2img`,
+  `${NOVITA_BASE_URL}/v3/image/generations`,
       payload,
       {
         headers: {
