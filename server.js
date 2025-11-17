@@ -10,6 +10,7 @@ import t2vRouter from './routes/kling-v2-5-turbo-text-to-video.js';
 import i2vRouter from './routes/kling-v2-5-turbo-imagine-i2v.js';
 import seedreamRouter from './routes/seedream-3-0-txt2img.js';
 import mergeFaceRouter from './routes/merge-face.js';
+import seedream4Router from './routes/seedream-4-0-txt2img.js';
 
 const app = express();
 app.use(helmet());
@@ -79,6 +80,7 @@ app.use('/api/kling/v2-5/t2v', t2vRouter);
 app.use('/api/kling/v2-5/i2v', i2vRouter);
 app.use('/api/seedream/3/t2i', seedreamRouter);
 app.use('/api/novita/merge-face', mergeFaceRouter);
+app.use('/api/seedream/4/t2i', seedream4Router);
 
 // ====== PRICING (fallback) ======
 const PRICING = {
