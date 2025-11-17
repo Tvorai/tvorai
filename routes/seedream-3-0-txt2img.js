@@ -1,9 +1,9 @@
 /**
- * Seedream 3.0 — Text to Image (Final version)
- * Works with:
+ * Seedream 3.0 — Text to Image (Final + Debug Version)
+ * Fully compatible with:
  *   /api/seedream/3/t2i/generate      ← official
- *   /api/seedream-3-0-txt2img         ← legacy UI fallback
- *   /api/seedream/txt2img             ← legacy UI fallback
+ *   /api/seedream-3-0-txt2img         ← legacy UI
+ *   /api/seedream/txt2img             ← legacy UI
  */
 
 import express from "express";
@@ -12,25 +12,42 @@ import { randomUUID } from "crypto";
 
 const router = express.Router();
 
-// ADD LEGACY ENDPOINT ALIASES -----------------------------------------------
-router.post("/", handleGenerate);        // /api/seedream-3-0-txt2img
-router.post("/generate", handleGenerate); // /api/seedream/3/t2i/generate
+// === ENV SANITIZATION + DEBUG =============================================
+function sanitizeEnvUrl(raw) {
+  if (!raw) return "";
+  return raw
+    .trim()                      // remove whitespace / newlines
+    .replace(/[^\x20-\x7E]/g, "") // remove invisible Unicode (zero-width etc)
+    .replace(/\/+$/, "");         // strip trailing slashes
+}
 
-export default router;
+const RAW_URL = process.env.NOVITA_BASE_URL;
+const CLEAN_URL = sanitizeEnvUrl(RAW_URL);
+
+// Debug output (IMPORTANT: this lets us SEE hidden characters)
+console.log("🔎 ENV NOVITA_BASE_URL RAW:  ", JSON.stringify(RAW_URL));
+console.log("🔎 ENV NOVITA_BASE_URL CLEAN:", JSON.stringify(CLEAN_URL));
+
+// Final usable URL fallback
+const NOVITA_BASE_URL = CLEAN_URL || "https://api.novita.ai";
 
 const NOVITA_API_KEY = process.env.NOVITA_API_KEY;
-const NOVITA_BASE_URL = (process.env.NOVITA_BASE_URL || "https://api.novita.ai")
-  .trim()
-  .replace(/\/+$/, "");
 
+// === ENV CHECK =============================================================
 function assertEnv() {
   if (!NOVITA_API_KEY) {
-    const err = new Error("NOVITA_API_KEY missing in ENV");
+    const err = new Error("NOVITA_API_KEY missing");
+    err.status = 500;
+    throw err;
+  }
+  if (!NOVITA_BASE_URL.startsWith("http")) {
+    const err = new Error("NOVITA_BASE_URL looks invalid: " + NOVITA_BASE_URL);
     err.status = 500;
     throw err;
   }
 }
 
+// === ROUTE HANDLER ==========================================================
 async function handleGenerate(req, res) {
   try {
     assertEnv();
@@ -43,15 +60,10 @@ async function handleGenerate(req, res) {
       seed = -1,
       guidance_scale = 2.5,
       watermark: watermarkRaw = "off",
-    } = req.body || {};
+    } = req.body ?? {};
 
     if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
-      return res.status(400).json({ error: "Missing or empty 'prompt'" });
-    }
-
-    const sizeRe = /^(\d{3,4})x(\d{3,4})$/;
-    if (!sizeRe.test(size)) {
-      return res.status(400).json({ error: "Invalid 'size' format (e.g. 1024x1024)" });
+      return res.status(400).json({ error: "Missing 'prompt'" });
     }
 
     const wmStr = String(watermarkRaw).trim().toLowerCase();
@@ -62,6 +74,8 @@ async function handleGenerate(req, res) {
         wmStr === "0" ||
         wmStr === "no"
       );
+
+    const endpoint = `${NOVITA_BASE_URL}/v3/image/generations`;
 
     const payload = {
       model_name: model,
@@ -76,28 +90,27 @@ async function handleGenerate(req, res) {
       },
     };
 
-    console.log("➡️ Sending to Novita:", JSON.stringify(payload, null, 2));
+    // 🔎 DEBUG LOGGING
+    console.log("📡 CALLING:", endpoint);
+    console.log("➡️ PAYLOAD:", JSON.stringify(payload, null, 2));
 
-    const r = await axios.post(
-      `${NOVITA_BASE_URL}/v3/image/generations`,
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${NOVITA_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        timeout: 60000,
-      }
-    );
+    const r = await axios.post(endpoint, payload, {
+      headers: {
+        Authorization: `Bearer ${NOVITA_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 60000,
+    });
 
-    console.log("⬅️ Novita raw response:", JSON.stringify(r.data, null, 2));
+    console.log("⬅️ Response:", JSON.stringify(r.data, null, 2));
 
     const entries = r?.data?.data;
     if (!Array.isArray(entries) || entries.length === 0) {
       return res.status(502).json({
-        error: "NO_RESULTS",
-        detail: "API returned no data",
-        raw: r.data
+        ok: false,
+        error: "NO_IMAGE_DATA",
+        raw: r.data,
+        code: 502
       });
     }
 
@@ -106,21 +119,30 @@ async function handleGenerate(req, res) {
 
     if (response_format === "b64_json") {
       if (!b64s.length) {
-        return res.status(502).json({ error: "NO_IMAGE_DATA", detail: "No b64_json returned" });
+        return res.status(502).json({ ok: false, error: "NO_B64", code: 502 });
       }
       return res.json({ ok: true, format: "b64_json", images: b64s });
     }
 
     if (!urls.length) {
-      return res.status(502).json({ error: "NO_IMAGE_URLS", detail: "No image_url returned" });
+      return res.status(502).json({ ok: false, error: "NO_URLS", code: 502 });
     }
 
     return res.json({ ok: true, format: "url", images: urls });
 
   } catch (e) {
-    const status = e?.status || e?.response?.status || 500;
-    const details = e?.response?.data || e?.message || "Unknown error";
-    console.error("seedream-3-0-txt2img error:", status, details);
-    return res.status(status).json({ error: "SERVER_ERROR", details });
+    console.error("❌ seedream-3-0-txt2img error:", e?.response?.status || e?.status || 500, e?.response?.data || e?.message);
+    return res.status(e?.status || e?.response?.status || 500).json({
+      ok: false,
+      error: "SERVER_ERROR",
+      raw: e?.response?.data || e?.message,
+      code: e?.response?.status || 500,
+    });
   }
 }
+
+// === ROUTE MAPPINGS =========================================================
+router.post("/", handleGenerate);        // legacy
+router.post("/generate", handleGenerate); // official
+
+export default router;
