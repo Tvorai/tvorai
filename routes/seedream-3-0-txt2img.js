@@ -1,9 +1,9 @@
 /**
- * Route: Seedream 3.0 — Text to Image
- * Mount: app.use('/api/seedream/3/t2i', router)
- *
- * Endpoint:
- *  POST /generate → returns image urls or base64
+ * Seedream 3.0 — Text to Image (Final version)
+ * Works with:
+ *   /api/seedream/3/t2i/generate      ← official
+ *   /api/seedream-3-0-txt2img         ← legacy UI fallback
+ *   /api/seedream/txt2img             ← legacy UI fallback
  */
 
 import express from "express";
@@ -11,12 +11,17 @@ import axios from "axios";
 import { randomUUID } from "crypto";
 
 const router = express.Router();
+
+// ADD LEGACY ENDPOINT ALIASES -----------------------------------------------
+router.post("/", handleGenerate);        // /api/seedream-3-0-txt2img
+router.post("/generate", handleGenerate); // /api/seedream/3/t2i/generate
+
 export default router;
 
 const NOVITA_API_KEY = process.env.NOVITA_API_KEY;
 const NOVITA_BASE_URL = (process.env.NOVITA_BASE_URL || "https://api.novita.ai")
   .trim()
-  .replace(/\/+$/, ""); // remove trailing slash
+  .replace(/\/+$/, "");
 
 function assertEnv() {
   if (!NOVITA_API_KEY) {
@@ -26,15 +31,14 @@ function assertEnv() {
   }
 }
 
-// === POST /generate ==========================================================
-router.post("/generate", async (req, res) => {
+async function handleGenerate(req, res) {
   try {
     assertEnv();
 
     const {
       prompt,
       model = "seedream-3-0-t2i-250415",
-      response_format = "url", // 'url' | 'b64_json'
+      response_format = "url",
       size = "1024x1024",
       seed = -1,
       guidance_scale = 2.5,
@@ -42,7 +46,7 @@ router.post("/generate", async (req, res) => {
     } = req.body || {};
 
     if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
-      return res.status(400).json({ error: "Missing or empty 'prompt'." });
+      return res.status(400).json({ error: "Missing or empty 'prompt'" });
     }
 
     const sizeRe = /^(\d{3,4})x(\d{3,4})$/;
@@ -50,7 +54,6 @@ router.post("/generate", async (req, res) => {
       return res.status(400).json({ error: "Invalid 'size' format (e.g. 1024x1024)" });
     }
 
-    // boolean watermark parsing
     const wmStr = String(watermarkRaw).trim().toLowerCase();
     const watermark =
       !(
@@ -60,16 +63,15 @@ router.post("/generate", async (req, res) => {
         wmStr === "no"
       );
 
-    // === PAYLOAD (FINAL AND CORRECT) ===
     const payload = {
-      model_name: model,               // ✔ correct key
-      request_id: randomUUID(),        // ✔ required
+      model_name: model,
+      request_id: randomUUID(),
       response_format,
       input: {
-        prompt: String(prompt),
+        prompt,
         size,
-        seed: Number(seed ?? -1),
-        guidance_scale: Number(guidance_scale ?? 2.5),
+        seed,
+        guidance_scale,
         watermark,
       },
     };
@@ -90,7 +92,6 @@ router.post("/generate", async (req, res) => {
 
     console.log("⬅️ Novita raw response:", JSON.stringify(r.data, null, 2));
 
-    // === HANDLE RESPONSE ===
     const entries = r?.data?.data;
     if (!Array.isArray(entries) || entries.length === 0) {
       return res.status(502).json({
@@ -100,13 +101,8 @@ router.post("/generate", async (req, res) => {
       });
     }
 
-    const urls = entries
-      .map((x) => x.image_url || null)
-      .filter(Boolean);
-
-    const b64s = entries
-      .map((x) => x.b64_json || null)
-      .filter(Boolean);
+    const urls = entries.map((x) => x.image_url).filter(Boolean);
+    const b64s = entries.map((x) => x.b64_json).filter(Boolean);
 
     if (response_format === "b64_json") {
       if (!b64s.length) {
@@ -115,7 +111,6 @@ router.post("/generate", async (req, res) => {
       return res.json({ ok: true, format: "b64_json", images: b64s });
     }
 
-    // default: URL mode
     if (!urls.length) {
       return res.status(502).json({ error: "NO_IMAGE_URLS", detail: "No image_url returned" });
     }
@@ -128,4 +123,4 @@ router.post("/generate", async (req, res) => {
     console.error("seedream-3-0-txt2img error:", status, details);
     return res.status(status).json({ error: "SERVER_ERROR", details });
   }
-});
+}
