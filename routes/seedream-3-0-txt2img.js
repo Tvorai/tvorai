@@ -39,6 +39,7 @@ router.post("/generate", async (req, res) => {
 
     // FINAL PAYLOAD (100% valid per Novita docs)
     const payload = {
+      console.log("🔥 Seedream payload on server:", payload);
       prompt,
       model: "seedream-3-0-t2i-250415", // REQUIRED
       size,
