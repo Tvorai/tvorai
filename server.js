@@ -83,13 +83,15 @@ app.use('/api/novita/merge-face', mergeFaceRouter);
 app.use('/api/seedream/4/t2i', seedream4Router);
 
 // ====== PRICING (fallback) ======
+// ====== PRICING (fallback) ======
 const PRICING = {
   kling_v25_i2v_imagine: 36,
   kling_v25_t2v: 36,
   seedream_30_t2i: 12,
-  novita_merge_face: 12, // 💰 nastav podľa seba
   seedream_40_t2i: 12,
+  novita_merge_face: 12 
 };
+
 function resolveCost(featureType, units = 1) {
   const base = PRICING[featureType];
   if (typeof base !== 'number') return null;
