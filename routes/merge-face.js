@@ -1,14 +1,6 @@
 /**
  * Route: Novita – Merge Face (with S3 upload)
  * Mount:  app.use('/api/novita/merge-face', mergeFaceRouter)
- *
- * POST /generate
- *  Body:
- *    - face_image_file (base64) OR multipart face_image
- *    - image_file (base64) OR multipart image_file
- *
- * Response:
- *    { ok: true, url: "https://your-s3-url/..." }
  */
 
 import express from 'express';
@@ -64,9 +56,7 @@ router.post(
     try {
       assertEnv();
 
-      // ------------------------------
       // 1) INPUT: base64 or multipart
-      ------------------------------
       let faceB64 =
         req.files?.face_image?.[0]?.buffer?.toString('base64') ||
         req.body?.face_image_file ||
@@ -84,13 +74,11 @@ router.post(
         });
       }
 
-      // watermark on/off
+      // watermark: on/off
       const wmStr = String(req.body?.watermark ?? 'off').trim().toLowerCase();
       const watermark = !(wmStr === 'off' || wmStr === 'false' || wmStr === '0' || wmStr === 'no');
 
-      // ------------------------------
-      // 2) Call Novita API
-      // ------------------------------
+      // 2) Novita API call
       const payload = {
         face_image_file: faceB64,
         image_file: imgB64,
@@ -115,18 +103,14 @@ router.post(
         });
       }
 
-      // ------------------------------
       // 3) Convert base64 → buffer
-      // ------------------------------
       const buffer = Buffer.from(outB64, 'base64');
 
       // S3 filename
       const filename = `faceswap/${crypto.randomUUID()}.${outType}`;
 
-      // ------------------------------
-      // 4) Upload to S3
-      // ------------------------------
-      const uploadResult = await s3
+      // 4) S3 upload
+      await s3
         .upload({
           Bucket: AWS_BUCKET,
           Key: filename,
@@ -136,16 +120,14 @@ router.post(
         })
         .promise();
 
-      // Signed URL (expires in 24h)
+      // Signed URL (24h)
       const signedUrl = s3.getSignedUrl('getObject', {
         Bucket: AWS_BUCKET,
         Key: filename,
-        Expires: 86400, // 24h
+        Expires: 86400,
       });
 
-      // ------------------------------
-      // 5) Response to WP
-      // ------------------------------
+      // 5) Response
       return res.json({
         ok: true,
         url: signedUrl,
