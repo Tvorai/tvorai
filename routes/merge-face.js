@@ -1,51 +1,40 @@
 /**
- * Route: Novita – Merge Face (with S3 upload)
- * Mount:  app.use('/api/novita/merge-face', mergeFaceRouter)
+ * Route: Novita – Merge Face + AWS S3 upload
+ * Mount: app.use('/api/novita/merge-face', mergeFaceRouter)
  */
 
 import express from 'express';
 import axios from 'axios';
 import multer from 'multer';
 import AWS from 'aws-sdk';
-import crypto from 'crypto';
 
 const router = express.Router();
 export default router;
 
-// ------------------------------
-// ENV VARS
-// ------------------------------
+// == NOVITA ==
 const NOVITA_API_KEY  = process.env.NOVITA_API_KEY;
 const NOVITA_BASE_URL = process.env.NOVITA_BASE_URL || 'https://api.novita.ai';
 
-const AWS_ACCESS_KEY = process.env.AWS_ACCESS_KEY;
-const AWS_SECRET_KEY = process.env.AWS_SECRET_KEY;
-const AWS_BUCKET     = process.env.AWS_BUCKET;
-const AWS_REGION     = process.env.AWS_REGION;
-
-// ------------------------------
-// Init S3
-// ------------------------------
-AWS.config.update({
-  accessKeyId: AWS_ACCESS_KEY,
-  secretAccessKey: AWS_SECRET_KEY,
-  region: AWS_REGION,
+// == AWS S3 ==
+const S3 = new AWS.S3({
+  region: process.env.AWS_REGION,
+  accessKeyId: process.env.AWS_ACCESS_KEY,
+  secretAccessKey: process.env.AWS_SECRET_KEY,
 });
 
-const s3 = new AWS.S3();
+const AWS_BUCKET = process.env.AWS_BUCKET;
 
 function assertEnv() {
   if (!NOVITA_API_KEY) throw new Error('NOVITA_API_KEY missing');
-  if (!AWS_ACCESS_KEY || !AWS_SECRET_KEY) throw new Error('AWS credentials missing');
-  if (!AWS_BUCKET) throw new Error('AWS_BUCKET missing');
+  if (!process.env.AWS_ACCESS_KEY) throw new Error('AWS_ACCESS_KEY missing');
+  if (!process.env.AWS_SECRET_KEY) throw new Error('AWS_SECRET_KEY missing');
+  if (!process.env.AWS_REGION)     throw new Error('AWS_REGION missing');
+  if (!process.env.AWS_BUCKET)     throw new Error('AWS_BUCKET missing');
 }
 
-// 30 MB limit
+// 30 MB upload limit (Novita max)
 const upload = multer({ limits: { fileSize: 30 * 1024 * 1024 } });
 
-// ------------------------------
-// ROUTE
-// ------------------------------
 router.post(
   '/generate',
   upload.fields([
@@ -56,7 +45,7 @@ router.post(
     try {
       assertEnv();
 
-      // 1) INPUT: base64 or multipart
+      // === 1) načítanie obrázkov ===
       let faceB64 =
         req.files?.face_image?.[0]?.buffer?.toString('base64') ||
         req.body?.face_image_file ||
@@ -71,18 +60,19 @@ router.post(
         return res.status(400).json({
           ok: false,
           error: 'MISSING_IMAGES',
+          detail: 'face_image + image_file (base64 alebo multipart) sú povinné.'
         });
       }
 
-      // watermark: on/off
+      // === 2) watermark ===
       const wmStr = String(req.body?.watermark ?? 'off').trim().toLowerCase();
       const watermark = !(wmStr === 'off' || wmStr === 'false' || wmStr === '0' || wmStr === 'no');
 
-      // 2) Novita API call
+      // === 3) volanie Novita ===
       const payload = {
-        face_image_file: faceB64,
-        image_file: imgB64,
-        extra: { watermark },
+        face_image_file: String(faceB64),
+        image_file: String(imgB64),
+        extra: { watermark }
       };
 
       const r = await axios.post(`${NOVITA_BASE_URL}/v3/merge-face`, payload, {
@@ -90,56 +80,52 @@ router.post(
           Authorization: `Bearer ${NOVITA_API_KEY}`,
           'Content-Type': 'application/json',
         },
-        timeout: 90000,
+        timeout: 60000,
       });
 
-      const outB64 = r?.data?.image_file;
+      const outB64  = r?.data?.image_file || null;
       const outType = r?.data?.image_type || 'png';
 
       if (!outB64) {
-        return res.status(500).json({
+        return res.status(502).json({
           ok: false,
-          error: 'NO_IMAGE_FROM_API',
+          error: 'NO_IMAGE_DATA',
+          detail: 'Novita API nevrátilo image_file.'
         });
       }
 
-      // 3) Convert base64 → buffer
+      // === 4) upload do AWS S3 ===
+      const fileName = `merge-face_${Date.now()}.${outType}`;
       const buffer = Buffer.from(outB64, 'base64');
 
-      // S3 filename
-      const filename = `faceswap/${crypto.randomUUID()}.${outType}`;
-
-      // 4) S3 upload
-      await s3
-        .upload({
-          Bucket: AWS_BUCKET,
-          Key: filename,
-          Body: buffer,
-          ContentType: `image/${outType}`,
-          ACL: 'private',
-        })
-        .promise();
-
-      // Signed URL (24h)
-      const signedUrl = s3.getSignedUrl('getObject', {
+      const uploadRes = await S3.upload({
         Bucket: AWS_BUCKET,
-        Key: filename,
-        Expires: 86400,
-      });
+        Key: fileName,
+        Body: buffer,
+        ContentType: `image/${outType}`,
+        ACL: "public-read", // dôležité – aby bol obrázok prístupný
+      }).promise();
 
-      // 5) Response
+      const url = uploadRes.Location; // verejná URL
+
+      // === 5) návrat na WP ===
       return res.json({
         ok: true,
-        url: signedUrl,
-        file: filename,
-        mime: `image/${outType}`,
+        image_type: outType,
+        image_base64: outB64,
+        data_url: `data:image/${outType};base64,${outB64}`,
+        url, // 🔥 WordPress použije TÚTO URL
       });
 
     } catch (e) {
-      console.error('merge-face error:', e);
-      return res.status(500).json({
+      const status = e?.status || e?.response?.status || 500;
+      const details = e?.response?.data || e?.message || 'Unknown error';
+      console.error('merge-face error:', status, details);
+
+      return res.status(status).json({
         ok: false,
-        error: e?.response?.data || e.message || 'SERVER_ERROR',
+        error: 'SERVER_ERROR',
+        details
       });
     }
   }
