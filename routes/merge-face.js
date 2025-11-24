@@ -103,7 +103,6 @@ router.post(
         Key: fileName,
         Body: buffer,
         ContentType: `image/${outType}`,
-        ACL: "public-read", // dôležité – aby bol obrázok prístupný
       }).promise();
 
       const url = uploadRes.Location; // verejná URL
