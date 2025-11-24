@@ -1,34 +1,59 @@
 /**
- * Route: Novita – Merge Face
- * Mount: app.use('/api/novita/merge-face', mergeFaceRouter)
+ * Route: Novita – Merge Face (with S3 upload)
+ * Mount:  app.use('/api/novita/merge-face', mergeFaceRouter)
  *
  * POST /generate
- *  A) JSON body:  { face_image_file: <base64>, image_file: <base64>, watermark?: 'on'|'off'|true|false|1|0 }
- *  B) multipart:   face_image (file), image_file (file), watermark (text)
- * Response: { ok, image_type, image_base64, data_url }
+ *  Body:
+ *    - face_image_file (base64) OR multipart face_image
+ *    - image_file (base64) OR multipart image_file
+ *
+ * Response:
+ *    { ok: true, url: "https://your-s3-url/..." }
  */
 
 import express from 'express';
 import axios from 'axios';
 import multer from 'multer';
+import AWS from 'aws-sdk';
+import crypto from 'crypto';
 
-const router = express.Router();     // <- toto bolo príčinou chyby
+const router = express.Router();
 export default router;
 
+// ------------------------------
+// ENV VARS
+// ------------------------------
 const NOVITA_API_KEY  = process.env.NOVITA_API_KEY;
 const NOVITA_BASE_URL = process.env.NOVITA_BASE_URL || 'https://api.novita.ai';
 
+const AWS_ACCESS_KEY = process.env.AWS_ACCESS_KEY;
+const AWS_SECRET_KEY = process.env.AWS_SECRET_KEY;
+const AWS_BUCKET     = process.env.AWS_BUCKET;
+const AWS_REGION     = process.env.AWS_REGION;
+
+// ------------------------------
+// Init S3
+// ------------------------------
+AWS.config.update({
+  accessKeyId: AWS_ACCESS_KEY,
+  secretAccessKey: AWS_SECRET_KEY,
+  region: AWS_REGION,
+});
+
+const s3 = new AWS.S3();
+
 function assertEnv() {
-  if (!NOVITA_API_KEY) {
-    const err = new Error('NOVITA_API_KEY chýba v env (Render → Environment).');
-    err.status = 500;
-    throw err;
-  }
+  if (!NOVITA_API_KEY) throw new Error('NOVITA_API_KEY missing');
+  if (!AWS_ACCESS_KEY || !AWS_SECRET_KEY) throw new Error('AWS credentials missing');
+  if (!AWS_BUCKET) throw new Error('AWS_BUCKET missing');
 }
 
-// 30 MB limit podľa Novita (max 2048x2048, ale rozlíšenie tu nekontrolujeme)
+// 30 MB limit
 const upload = multer({ limits: { fileSize: 30 * 1024 * 1024 } });
 
+// ------------------------------
+// ROUTE
+// ------------------------------
 router.post(
   '/generate',
   upload.fields([
@@ -39,7 +64,9 @@ router.post(
     try {
       assertEnv();
 
-      // 1) načítaj obrázky (multipart → base64; inak z JSON)
+      // ------------------------------
+      // 1) INPUT: base64 or multipart
+      ------------------------------
       let faceB64 =
         req.files?.face_image?.[0]?.buffer?.toString('base64') ||
         req.body?.face_image_file ||
@@ -51,50 +78,87 @@ router.post(
         null;
 
       if (!faceB64 || !imgB64) {
-        return res
-          .status(400)
-          .json({ error: 'MISSING_IMAGES', detail: 'Pošli face_image + image_file (base64 alebo multipart).' });
+        return res.status(400).json({
+          ok: false,
+          error: 'MISSING_IMAGES',
+        });
       }
 
-      // 2) voliteľný parameter watermark (čítaj on/off/true/false/1/0)
+      // watermark on/off
       const wmStr = String(req.body?.watermark ?? 'off').trim().toLowerCase();
       const watermark = !(wmStr === 'off' || wmStr === 'false' || wmStr === '0' || wmStr === 'no');
 
-      // 3) payload na Novita
+      // ------------------------------
+      // 2) Call Novita API
+      // ------------------------------
       const payload = {
-        face_image_file: String(faceB64),
-        image_file: String(imgB64),
-        extra: { watermark }, // ak model nepodporuje, API to ignoruje
+        face_image_file: faceB64,
+        image_file: imgB64,
+        extra: { watermark },
       };
 
-      // 4) volanie API
       const r = await axios.post(`${NOVITA_BASE_URL}/v3/merge-face`, payload, {
         headers: {
           Authorization: `Bearer ${NOVITA_API_KEY}`,
           'Content-Type': 'application/json',
         },
-        timeout: 60000,
+        timeout: 90000,
       });
 
-      const outB64  = r?.data?.image_file || null;
+      const outB64 = r?.data?.image_file;
       const outType = r?.data?.image_type || 'png';
+
       if (!outB64) {
-        return res
-          .status(502)
-          .json({ error: 'NO_IMAGE_DATA', detail: 'API nevrátilo image_file (base64).' });
+        return res.status(500).json({
+          ok: false,
+          error: 'NO_IMAGE_FROM_API',
+        });
       }
 
+      // ------------------------------
+      // 3) Convert base64 → buffer
+      // ------------------------------
+      const buffer = Buffer.from(outB64, 'base64');
+
+      // S3 filename
+      const filename = `faceswap/${crypto.randomUUID()}.${outType}`;
+
+      // ------------------------------
+      // 4) Upload to S3
+      // ------------------------------
+      const uploadResult = await s3
+        .upload({
+          Bucket: AWS_BUCKET,
+          Key: filename,
+          Body: buffer,
+          ContentType: `image/${outType}`,
+          ACL: 'private',
+        })
+        .promise();
+
+      // Signed URL (expires in 24h)
+      const signedUrl = s3.getSignedUrl('getObject', {
+        Bucket: AWS_BUCKET,
+        Key: filename,
+        Expires: 86400, // 24h
+      });
+
+      // ------------------------------
+      // 5) Response to WP
+      // ------------------------------
       return res.json({
         ok: true,
-        image_type: outType,
-        image_base64: outB64,
-        data_url: `data:image/${outType};base64,${outB64}`,
+        url: signedUrl,
+        file: filename,
+        mime: `image/${outType}`,
       });
+
     } catch (e) {
-      const status  = e?.status || e?.response?.status || 500;
-      const details = e?.response?.data || e?.message || 'Unknown error';
-      console.error('novita-merge-face error:', status, details);
-      return res.status(status).json({ error: 'SERVER_ERROR', details });
+      console.error('merge-face error:', e);
+      return res.status(500).json({
+        ok: false,
+        error: e?.response?.data || e.message || 'SERVER_ERROR',
+      });
     }
   }
 );
