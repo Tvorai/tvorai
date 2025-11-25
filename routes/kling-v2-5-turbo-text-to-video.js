@@ -173,8 +173,16 @@ router.get('/status/:taskId', async (req, res) => {
     }
 
     // success → vezmeme video_url, stiahneme a pošleme na S3
-    const firstVideo = Array.isArray(r?.data?.videos) ? r.data.videos[0] : null;
-    const sourceUrl = firstVideo?.video_url || null;
+    const rawVideos = Array.isArray(r?.data?.videos) ? r.data.videos : [];
+
+let selected = rawVideos.find(v => v.is_final === true);
+
+// fallback: ak API neposiela is_final → vezmeme POSLEDNÝ prvok
+if (!selected) {
+    selected = rawVideos[rawVideos.length - 1];
+}
+
+const sourceUrl = selected?.video_url || null;
 
     if (!sourceUrl) {
       return res.status(502).json({ status: 'failed', reason: 'NO_VIDEO_URL_FROM_API', meta });
