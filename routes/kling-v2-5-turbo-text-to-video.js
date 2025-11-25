@@ -4,16 +4,26 @@
  *
  * Endpoints (relatívne k mountu):
  *  POST /generate        → vytvorí task a vráti generationId
- *  GET  /status/:taskId  → stav tasku, prípadne videoUrl
+ *  GET  /status/:taskId  → stav tasku, prípadne videoUrl (už zo S3)
  */
 
 import express from 'express';
 import axios from 'axios';
+import AWS from 'aws-sdk';
 
 const router = express.Router();
 
-const NOVITA_API_KEY  = process.env.NOVITA_API_KEY; // Render → Environment
+const NOVITA_API_KEY  = process.env.NOVITA_API_KEY;
 const NOVITA_BASE_URL = process.env.NOVITA_BASE_URL || 'https://api.novita.ai';
+
+// === AWS S3 – rovnaké premenné ako pri merge-face ===
+const S3 = new AWS.S3({
+  region: process.env.AWS_REGION,
+  accessKeyId: process.env.AWS_ACCESS_KEY,
+  secretAccessKey: process.env.AWS_SECRET_KEY,
+});
+
+const AWS_BUCKET = process.env.AWS_BUCKET;
 
 /* Helpers */
 function assertEnv() {
@@ -22,7 +32,28 @@ function assertEnv() {
     err.status = 500;
     throw err;
   }
+  if (!process.env.AWS_REGION) {
+    const err = new Error('AWS_REGION chýba v env.');
+    err.status = 500;
+    throw err;
+  }
+  if (!process.env.AWS_ACCESS_KEY) {
+    const err = new Error('AWS_ACCESS_KEY chýba v env.');
+    err.status = 500;
+    throw err;
+  }
+  if (!process.env.AWS_SECRET_KEY) {
+    const err = new Error('AWS_SECRET_KEY chýba v env.');
+    err.status = 500;
+    throw err;
+  }
+  if (!AWS_BUCKET) {
+    const err = new Error('AWS_BUCKET chýba v env.');
+    err.status = 500;
+    throw err;
+  }
 }
+
 function normalizeCfgScale(val) {
   if (typeof val === 'number') return val;
   if (typeof val === 'string' && val.trim() !== '') return Number(val);
@@ -31,15 +62,6 @@ function normalizeCfgScale(val) {
 
 /**
  * POST /generate
- * Body:
- *  {
- *    prompt: string (req),
- *    duration?: "5" | "10" | 5 | 10 (default "5"),
- *    aspect_ratio?: "16:9" | "9:16" | "1:1" (default "16:9"),
- *    cfg_scale?: number 0..1 (default 0.5),
- *    mode?: "pro" (default "pro"),
- *    negative_prompt?: string
- *  }
  */
 router.post('/generate', async (req, res) => {
   try {
@@ -118,7 +140,7 @@ router.post('/generate', async (req, res) => {
  * Response:
  *  - { status: "in_progress", meta }
  *  - { status: "failed", reason, meta }
- *  - { status: "success", videoUrl, meta }
+ *  - { status: "success", videoUrl, meta }  // videoUrl = už S3 URL
  */
 router.get('/status/:taskId', async (req, res) => {
   try {
@@ -140,17 +162,45 @@ router.get('/status/:taskId', async (req, res) => {
     const reason = task.reason || '';
     const meta = { progress, eta, taskId };
 
-    if (status === 'TASK_STATUS_SUCCEED') {
-      const firstVideo = Array.isArray(r?.data?.videos) ? r.data.videos[0] : null;
-      const videoUrl = firstVideo?.video_url || null;
-      return res.json({ status: 'success', videoUrl, meta });
+    // ešte beží
+    if (status !== 'TASK_STATUS_SUCCEED' && status !== 'TASK_STATUS_FAILED') {
+      return res.json({ status: 'in_progress', meta });
     }
 
+    // zlyhalo
     if (status === 'TASK_STATUS_FAILED') {
       return res.json({ status: 'failed', reason: reason || 'Model failed', meta });
     }
 
-    return res.json({ status: 'in_progress', meta });
+    // success → vezmeme video_url, stiahneme a pošleme na S3
+    const firstVideo = Array.isArray(r?.data?.videos) ? r.data.videos[0] : null;
+    const sourceUrl = firstVideo?.video_url || null;
+
+    if (!sourceUrl) {
+      return res.status(502).json({ status: 'failed', reason: 'NO_VIDEO_URL_FROM_API', meta });
+    }
+
+    // stiahnuť video z Novita
+    const videoRes = await axios.get(sourceUrl, { responseType: 'arraybuffer', timeout: 60000 });
+    const buffer = Buffer.from(videoRes.data);
+
+    // upload na S3
+    const key = `kling_v25_t2v_${taskId}_${Date.now()}.mp4`;
+
+    const uploadRes = await S3.upload({
+      Bucket: AWS_BUCKET,
+      Key: key,
+      Body: buffer,
+      ContentType: 'video/mp4',
+    }).promise();
+
+    const s3Url = uploadRes.Location;
+
+    return res.json({
+      status: 'success',
+      videoUrl: s3Url, // 👉 odteraz používaj túto URL
+      meta
+    });
   } catch (e) {
     const status = e?.status || e?.response?.status || 500;
     const detail = e?.response?.data || e?.message || 'Unknown error';
