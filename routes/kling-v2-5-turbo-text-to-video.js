@@ -203,7 +203,24 @@ const sourceUrl = selected?.video_url || null;
     }).promise();
 
     const s3Url = uploadRes.Location;
-
+// === 🔥 ULOŽENIE AI HISTÓRIE DO WORDPRESSU ===
+try {
+  await axios.post(
+    process.env.WP_AJAX_URL,
+    new URLSearchParams({
+      action: 'ai_history_save_api',
+      prompt: task?.prompt || 'Kling Turbo T2V', // ak prompt API nevracia, dá default
+      url: s3Url,
+      type: 'video'
+    }),
+    {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" }
+    }
+  );
+  console.log("✔ AI HISTORY uložené pre Kling T2V");
+} catch (err) {
+  console.error("❌ AI HISTORY FAIL:", err.message);
+}
     return res.json({
       status: 'success',
       videoUrl: s3Url, // 👉 odteraz používaj túto URL
