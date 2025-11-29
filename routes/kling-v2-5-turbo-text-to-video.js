@@ -180,7 +180,7 @@ router.get('/status/:taskId', async (req, res) => {
           action: 'ai_history_save_api',
           prompt: task?.prompt || 'Kling Turbo T2V',
           url: s3Url,
-          type: 'video'
+          type: 'kling_v25_i2v'
         }),
         { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
       );
