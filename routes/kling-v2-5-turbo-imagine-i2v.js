@@ -104,6 +104,7 @@ router.post('/generate', upload.single('image'), async (req, res) => {
       image,
       prompt: String(prompt),
       duration: String(duration),     // "5" | "10"
+      aspect_ratio: String(aspect_ratio).trim()
       mode,
       ...(typeof cfg_scale !== 'undefined' ? { cfg_scale: Number(cfg_scale) } : {}),
       ...(negative_prompt ? { negative_prompt } : {})
