@@ -48,13 +48,23 @@ router.post('/generate', async (req, res) => {
     assertEnv();
 
     const {
-      prompt,
-      duration = '5',
-      aspect_ratio = '16:9',
-      cfg_scale,
-      mode = 'pro',
-      negative_prompt
-    } = req.body || {};
+  prompt,
+  duration = '5',
+  aspect_ratio = '16:9',
+  cfg_scale,
+  mode = 'pro',
+  negative_prompt
+} = req.body || {};
+
+// 🔥 NORMALIZÁCIA
+aspect_ratio = typeof aspect_ratio === 'string' ? aspect_ratio.trim() : '16:9';
+
+// 🔥 VALIDÁCIA
+const allowedAR = new Set(['16:9', '9:16', '1:1']);
+if (!allowedAR.has(aspect_ratio)) {
+  aspect_ratio = '16:9';
+}
+
 
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       return res.status(400).json({ error: "Missing or empty 'prompt'." });
