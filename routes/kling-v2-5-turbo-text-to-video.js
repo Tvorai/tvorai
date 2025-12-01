@@ -1,10 +1,6 @@
 /**
  * Route: Kling V2.5 Turbo Text to Video
  * Mount v server.js: app.use('/api/kling/v2-5/t2v', t2vRouter)
- *
- * Endpoints:
- *  POST /generate        → vytvorí task a vráti generationId
- *  GET  /status/:taskId  → stav tasku, prípadne videoUrl (už zo S3)
  */
 
 import express from 'express';
@@ -47,34 +43,49 @@ router.post('/generate', async (req, res) => {
   try {
     assertEnv();
 
-    const {
-  prompt,
-  duration = '5',
-  aspect_ratio = '16:9',
-  cfg_scale,
-  mode = 'pro',
-  negative_prompt
-} = req.body || {};
+    // 🔥 let → môžeme prepisovať aspect_ratio
+    let {
+      prompt,
+      duration = '5',
+      aspect_ratio = '16:9',
+      cfg_scale,
+      mode = 'pro',
+      negative_prompt
+    } = req.body || {};
 
-// 🔥 NORMALIZÁCIA
-aspect_ratio = typeof aspect_ratio === 'string' ? aspect_ratio.trim() : '16:9';
+    // 🔥 NORMALIZÁCIA ASPECT RATIO (kritická!)
+    aspect_ratio = typeof aspect_ratio === 'string'
+      ? aspect_ratio.trim()
+      : '16:9';
 
+    // Validate prompt
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       return res.status(400).json({ error: "Missing or empty 'prompt'." });
     }
 
+    // Allowed values
     const allowedDur = new Set(['5', '10', 5, 10]);
     const allowedAR  = new Set(['16:9', '9:16', '1:1']);
 
-    if (!allowedDur.has(duration)) return res.status(400).json({ error: "Invalid duration." });
-    if (!allowedAR.has(aspect_ratio)) return res.status(400).json({ error: "Invalid aspect_ratio." });
-    if (mode !== 'pro') return res.status(400).json({ error: "Invalid mode (only pro)." });
+    if (!allowedDur.has(duration)) {
+      return res.status(400).json({ error: "Invalid duration." });
+    }
 
+    if (!allowedAR.has(aspect_ratio)) {
+      return res.status(400).json({ error: "Invalid aspect_ratio." });
+    }
+
+    if (mode !== 'pro') {
+      return res.status(400).json({ error: "Invalid mode (only pro)." });
+    }
+
+    // CFG scale validation
     const cfg = normalizeCfgScale(cfg_scale);
     if (typeof cfg !== 'undefined' && (Number.isNaN(cfg) || cfg < 0 || cfg > 1)) {
       return res.status(400).json({ error: "Invalid cfg_scale (0..1)." });
     }
 
+    // Payload to Novita API
     const payload = {
       prompt: String(prompt),
       duration: String(duration),
@@ -84,6 +95,7 @@ aspect_ratio = typeof aspect_ratio === 'string' ? aspect_ratio.trim() : '16:9';
       ...(negative_prompt ? { negative_prompt } : {})
     };
 
+    // API CALL
     const r = await axios.post(
       `${NOVITA_BASE_URL}/v3/async/kling-2.5-turbo-t2v`,
       payload,
@@ -129,23 +141,21 @@ router.get('/status/:taskId', async (req, res) => {
 
     const task = r?.data?.task || {};
     const status = task.status;
+
     const meta = {
       progress: task.progress_percent ?? 0,
       eta: task.eta ?? 0,
       taskId
     };
 
-    // STILL IN PROGRESS
     if (status !== 'TASK_STATUS_SUCCEED' && status !== 'TASK_STATUS_FAILED') {
       return res.json({ status: 'in_progress', meta });
     }
 
-    // FAILED
     if (status === 'TASK_STATUS_FAILED') {
       return res.json({ status: 'failed', reason: task.reason || 'Model failed', meta });
     }
 
-    // SUCCESS
     const rawVideos = Array.isArray(r?.data?.videos) ? r.data.videos : [];
     let selected = rawVideos.find(v => v.is_final === true);
     if (!selected) selected = rawVideos[rawVideos.length - 1];
@@ -155,7 +165,6 @@ router.get('/status/:taskId', async (req, res) => {
       return res.status(502).json({ status: 'failed', reason: 'NO_VIDEO_URL', meta });
     }
 
-    // DOWNLOAD VIDEO
     const videoRes = await axios.get(sourceUrl, {
       responseType: 'arraybuffer',
       timeout: 60000
@@ -163,7 +172,6 @@ router.get('/status/:taskId', async (req, res) => {
 
     const buffer = Buffer.from(videoRes.data);
 
-    // UPLOAD TO S3
     const key = `kling_v25_t2v_${taskId}_${Date.now()}.mp4`;
 
     const uploadRes = await S3.upload({
@@ -175,7 +183,7 @@ router.get('/status/:taskId', async (req, res) => {
 
     const s3Url = uploadRes.Location;
 
-    // === 🔥 SAVE AI HISTORY TO WORDPRESS ===
+    // WordPress history
     try {
       await axios.post(
         process.env.WP_AJAX_URL,
@@ -183,7 +191,7 @@ router.get('/status/:taskId', async (req, res) => {
           action: 'ai_history_save_api',
           prompt: task?.prompt || 'Kling Turbo T2V',
           url: s3Url,
-          type: 'kling_v25_i2v'
+          type: 'kling_v25_t2v'
         }),
         { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
       );
