@@ -61,8 +61,7 @@ router.post('/generate', upload.single('image'), async (req, res) => {
       duration = '5',
       cfg_scale,
       mode = 'pro',
-      aspect_ratio = '16:9', 
-      aspect_ratio,
+      aspect_ratio = '16:9',
       negative_prompt
       // aspect_ratio sa v Novita I2V neuvádza (ignorujeme)
     } = req.body || {};
