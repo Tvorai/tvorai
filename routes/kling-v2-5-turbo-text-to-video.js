@@ -43,7 +43,6 @@ router.post('/generate', async (req, res) => {
   try {
     assertEnv();
 
-    // 🔥 let → môžeme prepisovať aspect_ratio
     let {
       prompt,
       duration = '5',
@@ -53,10 +52,15 @@ router.post('/generate', async (req, res) => {
       negative_prompt
     } = req.body || {};
 
-    // 🔥 NORMALIZÁCIA ASPECT RATIO (kritická!)
-    aspect_ratio = typeof aspect_ratio === 'string'
-      ? aspect_ratio.trim()
-      : '16:9';
+    // 🔥 FIX: WP môže poslať aspect_ratio ako array (aspect_ratio[])
+    if (Array.isArray(aspect_ratio)) {
+      aspect_ratio = aspect_ratio[0];
+    }
+
+    aspect_ratio = String(aspect_ratio).trim();
+
+    // 🔥 NORMALIZÁCIA DURATION (rovnako môže prísť ako number)
+    duration = String(duration).trim();
 
     // Validate prompt
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
@@ -64,11 +68,11 @@ router.post('/generate', async (req, res) => {
     }
 
     // Allowed values
-    const allowedDur = new Set(['5', '10', 5, 10]);
+    const allowedDur = new Set(['5', '10']);
     const allowedAR  = new Set(['16:9', '9:16', '1:1']);
 
     if (!allowedDur.has(duration)) {
-      return res.status(400).json({ error: "Invalid duration." });
+      return res.status(400).json({ error: "Invalid duration (5|10)." });
     }
 
     if (!allowedAR.has(aspect_ratio)) {
@@ -88,12 +92,14 @@ router.post('/generate', async (req, res) => {
     // Payload to Novita API
     const payload = {
       prompt: String(prompt),
-      duration: String(duration),
+      duration,
       aspect_ratio,
       mode,
       ...(typeof cfg === 'number' ? { cfg_scale: cfg } : {}),
       ...(negative_prompt ? { negative_prompt } : {})
     };
+
+    console.log(">>> PAYLOAD SENT TO NOVITA:", payload);
 
     // API CALL
     const r = await axios.post(
@@ -183,7 +189,7 @@ router.get('/status/:taskId', async (req, res) => {
 
     const s3Url = uploadRes.Location;
 
-    // WordPress history
+    // === SAVE HISTORY TO WORDPRESS ===
     try {
       await axios.post(
         process.env.WP_AJAX_URL,
