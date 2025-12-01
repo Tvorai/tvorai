@@ -44,20 +44,25 @@ router.post('/generate', async (req, res) => {
     assertEnv();
 
     let {
-      prompt,
-      duration = '5',
-      aspect_ratio = '16:9',
-      cfg_scale,
-      mode = 'pro',
-      negative_prompt
-    } = req.body || {};
+  prompt,
+  duration = '5',
+  aspect_ratio = '16:9',
+  cfg_scale,
+  mode = 'pro',
+  negative_prompt
+} = req.body || {};
 
-    // 🔥 FIX: WP môže poslať aspect_ratio ako array (aspect_ratio[])
-    if (Array.isArray(aspect_ratio)) {
-      aspect_ratio = aspect_ratio[0];
-    }
+// FIX: WP môže poslať array (aspect_ratio[])
+if (Array.isArray(aspect_ratio)) {
+    aspect_ratio = aspect_ratio[0];
+}
 
-    aspect_ratio = String(aspect_ratio).trim();
+aspect_ratio = String(aspect_ratio).trim();
+aspect_ratio = aspect_ratio.replace(/[^0-9:]/g, '');
+
+if (aspect_ratio.startsWith(':')) {
+    aspect_ratio = aspect_ratio.substring(1);
+}
 
     // 🔥 NORMALIZÁCIA DURATION (rovnako môže prísť ako number)
     duration = String(duration).trim();
