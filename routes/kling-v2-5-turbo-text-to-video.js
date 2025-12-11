@@ -58,7 +58,7 @@ if (Array.isArray(aspect_ratio)) {
 }
 
 aspect_ratio = String(aspect_ratio).trim();
-aspect_ratio = aspect_ratio.replace(/[^0-9:]/g, '');
+
 
 if (aspect_ratio.startsWith(':')) {
     aspect_ratio = aspect_ratio.substring(1);
