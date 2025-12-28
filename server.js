@@ -1,8 +1,11 @@
 // server.js — KLING v2.5 (T2V/I2V) + Seedream T2I + Merge Face + kredity/DB (ESM)
+
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import mysql from 'mysql2/promise';
+import Stripe from 'stripe';
+import fetch from 'node-fetch';
 import 'dotenv/config';
 
 // ROUTES
@@ -13,9 +16,67 @@ import mergeFaceRouter from './routes/merge-face.js';
 import seedream4Router from './routes/seedream-4-0-txt2img.js';
 
 const app = express();
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+/**
+ * ======================================================
+ * STRIPE WEBHOOK — MUSÍ BYŤ PRED express.json()
+ * ======================================================
+ */
+app.post(
+  '/stripe/webhook',
+  express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    const sig = req.headers['stripe-signature'];
+
+    let event;
+    try {
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        process.env.STRIPE_WEBHOOK_SECRET
+      );
+    } catch (err) {
+      console.error('❌ Stripe signature error:', err.message);
+      return res.status(400).send('Invalid signature');
+    }
+
+    // Reagujeme len na úspešnú platbu
+    if (event.type === 'payment_intent.succeeded') {
+      const intent = event.data.object;
+
+      console.log('✅ Stripe payment succeeded:', intent.id);
+
+      const txnId  = intent.metadata?.mepr_transaction_id;
+      const userId = intent.metadata?.wp_user_id;
+
+      if (txnId && userId) {
+        try {
+          await fetch('https://www.tvorai.cz/wp-json/lyra/v1/confirm-payment', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-LYRA-SECRET': process.env.LYRA_SHARED_SECRET,
+            },
+            body: JSON.stringify({
+              transaction_id: txnId,
+              user_id: userId,
+            }),
+          });
+        } catch (e) {
+          console.error('❌ Failed to notify WordPress:', e.message);
+        }
+      }
+    }
+
+    res.json({ received: true });
+  }
+);
+
+// ====== MIDDLEWARE (AŽ PO WEBHOOKE) ======
 app.use(helmet());
 app.use(cors());
-app.use(express.json({ limit: '20mb' })); // väčší limit kvôli base64 obrázkom
+app.use(express.json({ limit: '20mb' })); // pre bežné API
 
 // ====== DB POOL ======
 const pool = mysql.createPool({
@@ -48,7 +109,7 @@ try {
   console.error('DB ping FAILED:', e?.message || e);
 }
 
-// --- Keepalive ping každé 4 minúty (Render idle fix) ---
+// --- Keepalive ping každé 4 minúty ---
 setInterval(async () => {
   try {
     await pool.query('SELECT 1');
@@ -57,7 +118,7 @@ setInterval(async () => {
   }
 }, 1000 * 60 * 4);
 
-// --- DEBUG endpoint ---
+// ====== DEBUG ======
 app.get('/debug/db', async (_req, res) => {
   try {
     const conn = await pool.getConnection();
@@ -82,32 +143,7 @@ app.use('/api/seedream/3/t2i', seedreamRouter);
 app.use('/api/novita/merge-face', mergeFaceRouter);
 app.use('/api/seedream/4/t2i', seedream4Router);
 
-// ====== PRICING (fallback) ======
-// ====== PRICING (fallback) ======
-const PRICING = {
-  kling_v25_i2v_imagine: 36,
-  kling_v25_t2v: 36,
-  seedream_30_t2i: 12,
-  seedream_40_t2i: 12,
-  novita_merge_face: 12 
-};
-
-function resolveCost(featureType, units = 1) {
-  const base = PRICING[featureType];
-  if (typeof base !== 'number') return null;
-  const u = Math.max(1, Number(units || 1));
-  return base * u;
-}
-
-// ====== HELPERS ======
-async function getOrCreateUserByWpId(conn, wp_user_id, email) {
-  const [rows] = await conn.query('SELECT id FROM users WHERE wp_user_id = ? LIMIT 1', [wp_user_id]);
-  if (rows.length > 0) return rows[0].id;
-  const [ins] = await conn.query('INSERT INTO users (wp_user_id, email) VALUES (?, ?)', [wp_user_id, email || null]);
-  return ins.insertId;
-}
-
-// ====== WEBHOOK: subscription update ======
+// ====== WEBHOOK: subscription update (z WP) ======
 app.post('/webhook/subscription-update', async (req, res) => {
   const payload = req.body || {};
   let conn;
@@ -125,7 +161,9 @@ app.post('/webhook/subscription-update', async (req, res) => {
     conn = await pool.getConnection();
     await conn.beginTransaction();
 
-    const userId = await getOrCreateUserByWpId(conn, wp_user_id, email);
+    const [rows] = await conn.query('SELECT id FROM users WHERE wp_user_id = ? LIMIT 1', [wp_user_id]);
+    const userId = rows.length ? rows[0].id :
+      (await conn.query('INSERT INTO users (wp_user_id, email) VALUES (?, ?)', [wp_user_id, email || null]))[0].insertId;
 
     await conn.query(
       `INSERT INTO subscriptions (user_id, plan_id, monthly_credit_limit, cycle_start, cycle_end, active)
@@ -152,102 +190,17 @@ app.post('/webhook/subscription-update', async (req, res) => {
     await conn.commit();
     res.json({ ok: true, user_id: userId });
   } catch (e) {
-    if (conn) {
-      try { await conn.rollback(); } catch {}
-    }
+    if (conn) await conn.rollback();
     console.error('subscription-update error', e);
-    res.status(500).json({ error: 'DB_ERROR', detail: String(e?.message || e) });
+    res.status(500).json({ error: 'DB_ERROR' });
   } finally {
     if (conn) conn.release();
-  }
-});
-
-// ====== CONSUME CREDITS ======
-app.post('/consume', async (req, res) => {
-  let conn;
-  try {
-    let { wp_user_id, feature_type, credits_spent, metadata, units } = req.body || {};
-    if (!credits_spent && feature_type) {
-      const computed = resolveCost(feature_type, units);
-      if (computed != null) credits_spent = computed;
-    }
-    if (!wp_user_id || !credits_spent) return res.status(400).json({ error: 'MISSING_FIELDS' });
-
-    wp_user_id = Number(wp_user_id);
-    credits_spent = Math.max(0, Number(credits_spent));
-
-    conn = await pool.getConnection();
-    await conn.beginTransaction();
-
-    const [[userRow]] = await conn.query('SELECT id FROM users WHERE wp_user_id = ? LIMIT 1', [wp_user_id]);
-    if (!userRow) { await conn.rollback(); return res.status(404).json({ error: 'USER_NOT_FOUND' }); }
-    const userId = userRow.id;
-
-    const [[sub]] = await conn.query('SELECT active FROM subscriptions WHERE user_id = ? LIMIT 1', [userId]);
-    if (!sub || !sub.active) { await conn.rollback(); return res.status(403).json({ error: 'SUBSCRIPTION_INACTIVE' }); }
-
-    const [[bal]] = await conn.query('SELECT credits_remaining FROM credit_balances WHERE user_id = ? LIMIT 1', [userId]);
-    if (!bal) { await conn.rollback(); return res.status(404).json({ error: 'BALANCE_NOT_FOUND' }); }
-
-    if (bal.credits_remaining < credits_spent) {
-      await conn.rollback();
-      return res.status(402).json({ error: 'INSUFFICIENT_CREDITS', credits_remaining: bal.credits_remaining });
-    }
-
-    await conn.query('UPDATE credit_balances SET credits_remaining = credits_remaining - ?, updated_at = NOW() WHERE user_id = ?', [credits_spent, userId]);
-    await conn.query(
-      'INSERT INTO usage_logs (user_id, feature_type, credits_spent, metadata) VALUES (?, ?, ?, CAST(? AS JSON))',
-      [userId, feature_type || 'generic', credits_spent, JSON.stringify(metadata || { units: units || 1 })]
-    );
-
-    const [[after]] = await conn.query('SELECT credits_remaining FROM credit_balances WHERE user_id = ? LIMIT 1', [userId]);
-    await conn.commit();
-    res.json({ ok: true, credits_remaining: after.credits_remaining });
-  } catch (e) {
-    if (conn) {
-      try { await conn.rollback(); } catch {}
-    }
-    console.error('consume error', e);
-    res.status(500).json({ error: 'DB_ERROR', detail: String(e?.message || e) });
-  } finally {
-    if (conn) conn.release();
-  }
-});
-
-// ====== USAGE ======
-app.get('/usage/:wp_user_id', async (req, res) => {
-  try {
-    const wp_user_id = Number(req.params.wp_user_id);
-    const conn = await pool.getConnection();
-    try {
-      const [[userRow]] = await conn.query('SELECT id FROM users WHERE wp_user_id = ? LIMIT 1', [wp_user_id]);
-      if (!userRow) return res.status(404).json({ error: 'USER_NOT_FOUND' });
-      const userId = userRow.id;
-
-      const [[sub]] = await conn.query('SELECT plan_id, monthly_credit_limit, active, cycle_end FROM subscriptions WHERE user_id = ? LIMIT 1', [userId]);
-      const [[bal]] = await conn.query('SELECT credits_remaining, cycle_start FROM credit_balances WHERE user_id = ? LIMIT 1', [userId]);
-
-      res.json({
-        wp_user_id,
-        plan_id: sub ? sub.plan_id : null,
-        monthly_credit_limit: sub ? sub.monthly_credit_limit : 0,
-        active: sub ? !!sub.active : false,
-        credits_remaining: bal ? bal.credits_remaining : 0,
-        cycle_start: bal ? bal.cycle_start : null,
-        cycle_end: sub ? sub.cycle_end : null,
-      });
-    } finally {
-      conn.release();
-    }
-  } catch (e) {
-    console.error('usage error', e);
-    res.status(500).json({ error: 'SERVER_ERROR' });
   }
 });
 
 // Healthcheck
 app.get('/', (_, res) => res.send('TvorAI backend OK'));
 
-// ====== START SERVER ======
+// ====== START ======
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
