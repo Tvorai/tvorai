@@ -17,6 +17,25 @@ app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: '20mb' })); // väčší limit kvôli base64 obrázkom
 
+// ====== API KEY PROTECTION ======
+const LYRA_API_KEY = process.env.LYRA_API_KEY;
+
+function requireApiKey(req, res, next) {
+  // verejný healthcheck
+  if (req.path === '/' || req.path === '/health') return next();
+
+  if (!LYRA_API_KEY) {
+    return res.status(500).json({ error: 'SERVER_MISCONFIGURED' });
+  }
+
+  const key = req.get('X-API-KEY');
+  if (!key || key !== LYRA_API_KEY) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
+  }
+
+  next();
+}
+
 // ====== DB POOL ======
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
@@ -57,8 +76,8 @@ setInterval(async () => {
   }
 }, 1000 * 60 * 4);
 
-// --- DEBUG endpoint ---
-app.get('/debug/db', async (_req, res) => {
+// ====== DEBUG endpoint (CHránený) ======
+app.get('/debug/db', requireApiKey, async (_req, res) => {
   try {
     const conn = await pool.getConnection();
     try {
@@ -75,21 +94,20 @@ app.get('/debug/db', async (_req, res) => {
   }
 });
 
-// ====== MOUNT ROUTERS ======
-app.use('/api/kling/v2-5/t2v', t2vRouter);
-app.use('/api/kling/v2-5/i2v', i2vRouter);
-app.use('/api/seedream/3/t2i', seedreamRouter);
-app.use('/api/novita/merge-face', mergeFaceRouter);
-app.use('/api/seedream/4/t2i', seedream4Router);
+// ====== MOUNT ROUTERS (CHránené) ======
+app.use('/api/kling/v2-5/t2v', requireApiKey, t2vRouter);
+app.use('/api/kling/v2-5/i2v', requireApiKey, i2vRouter);
+app.use('/api/seedream/3/t2i', requireApiKey, seedreamRouter);
+app.use('/api/novita/merge-face', requireApiKey, mergeFaceRouter);
+app.use('/api/seedream/4/t2i', requireApiKey, seedream4Router);
 
-// ====== PRICING (fallback) ======
 // ====== PRICING (fallback) ======
 const PRICING = {
   kling_v25_i2v_imagine: 36,
   kling_v25_t2v: 36,
   seedream_30_t2i: 12,
   seedream_40_t2i: 12,
-  novita_merge_face: 12 
+  novita_merge_face: 12,
 };
 
 function resolveCost(featureType, units = 1) {
@@ -107,8 +125,8 @@ async function getOrCreateUserByWpId(conn, wp_user_id, email) {
   return ins.insertId;
 }
 
-// ====== WEBHOOK: subscription update ======
-app.post('/webhook/subscription-update', async (req, res) => {
+// ====== WEBHOOK: subscription update (CHránený) ======
+app.post('/webhook/subscription-update', requireApiKey, async (req, res) => {
   const payload = req.body || {};
   let conn;
   try {
@@ -156,14 +174,14 @@ app.post('/webhook/subscription-update', async (req, res) => {
       try { await conn.rollback(); } catch {}
     }
     console.error('subscription-update error', e);
-    res.status(500).json({ error: 'DB_ERROR', detail: String(e?.message || e) });
+    res.status(500).json({ error: 'DB_ERROR' });
   } finally {
     if (conn) conn.release();
   }
 });
 
-// ====== CONSUME CREDITS ======
-app.post('/consume', async (req, res) => {
+// ====== CONSUME CREDITS (CHránený) ======
+app.post('/consume', requireApiKey, async (req, res) => {
   let conn;
   try {
     let { wp_user_id, feature_type, credits_spent, metadata, units } = req.body || {};
@@ -194,7 +212,11 @@ app.post('/consume', async (req, res) => {
       return res.status(402).json({ error: 'INSUFFICIENT_CREDITS', credits_remaining: bal.credits_remaining });
     }
 
-    await conn.query('UPDATE credit_balances SET credits_remaining = credits_remaining - ?, updated_at = NOW() WHERE user_id = ?', [credits_spent, userId]);
+    await conn.query(
+      'UPDATE credit_balances SET credits_remaining = credits_remaining - ?, updated_at = NOW() WHERE user_id = ?',
+      [credits_spent, userId]
+    );
+
     await conn.query(
       'INSERT INTO usage_logs (user_id, feature_type, credits_spent, metadata) VALUES (?, ?, ?, CAST(? AS JSON))',
       [userId, feature_type || 'generic', credits_spent, JSON.stringify(metadata || { units: units || 1 })]
@@ -208,14 +230,14 @@ app.post('/consume', async (req, res) => {
       try { await conn.rollback(); } catch {}
     }
     console.error('consume error', e);
-    res.status(500).json({ error: 'DB_ERROR', detail: String(e?.message || e) });
+    res.status(500).json({ error: 'DB_ERROR' });
   } finally {
     if (conn) conn.release();
   }
 });
 
-// ====== USAGE ======
-app.get('/usage/:wp_user_id', async (req, res) => {
+// ====== USAGE (CHránený) ======
+app.get('/usage/:wp_user_id', requireApiKey, async (req, res) => {
   try {
     const wp_user_id = Number(req.params.wp_user_id);
     const conn = await pool.getConnection();
@@ -245,7 +267,7 @@ app.get('/usage/:wp_user_id', async (req, res) => {
   }
 });
 
-// Healthcheck
+// Healthcheck (verejný)
 app.get('/', (_, res) => res.send('TvorAI backend OK'));
 
 // ====== START SERVER ======
