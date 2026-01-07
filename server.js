@@ -28,7 +28,8 @@ app.use(express.json({ limit: '20mb', verify: rawBodySaver }));
 app.use(express.urlencoded({ extended: true, verify: rawBodySaver }));
 
 // ===== HMAC AUTH =====
-const SHARED_SECRET = process.env.WP_SHARED_SECRET;
+const SHARED_SECRET = process.env.TVORAI_SHARED_SECRET;
+
 
 function timingSafeEqual(a, b) {
   const ab = Buffer.from(a);
