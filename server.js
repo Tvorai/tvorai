@@ -58,7 +58,7 @@ function verifyWpSignature(req, res, next) {
   }
 
   const body = req.rawBody || '';
-  const base = `${ts}.${req.method}.${req.originalUrl}.${body}`;
+  const base = `${ts}.${req.method}.${req.path}.${body}`;
 
   const expected = crypto
     .createHmac('sha256', SHARED_SECRET)
