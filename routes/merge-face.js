@@ -45,28 +45,30 @@ router.post(
     { name: 'face_image', maxCount: 1 },
     { name: 'image_file', maxCount: 1 },
   ]),
-  async (req, res) => {
-    try {
-      assertEnv();
 
-      // === 1) načítanie obrázkov ===
-      let faceB64 =
-        req.files?.face_image?.[0]?.buffer?.toString('base64') ||
-        req.body?.face_image_file ||
-        null;
+const faceFile = req.files?.face_image?.[0];
+const imageFile = req.files?.image_file?.[0];
 
-      let imgB64 =
-        req.files?.image_file?.[0]?.buffer?.toString('base64') ||
-        req.body?.image_file ||
-        null;
+const facePath = faceFile?.path;
+const imagePath = imageFile?.path;
 
-      if (!faceB64 || !imgB64) {
+const faceStream = facePath ? fs.createReadStream(facePath) : null;
+const imageStream = imagePath ? fs.createReadStream(imagePath) : null;
+
+if (!faceStream || !imageStream) {
+  return res.status(400).json({
+    ok: false,
+    error: "MISSING_IMAGES",
+    detail: "face_image + image_file sú povinné.",
+  });
+}
+
         return res.status(400).json({
           ok: false,
           error: 'MISSING_IMAGES',
           detail: 'face_image + image_file (base64 alebo multipart) sú povinné.'
         });
-      }
+      
 
       // === 2) watermark ===
       const wmStr = String(req.body?.watermark ?? 'off').trim().toLowerCase();
