@@ -3,6 +3,9 @@
  * Mount: app.use('/api/novita/merge-face', mergeFaceRouter)
  */
 
+import fs from "fs";
+import { makeUploader } from "../core/includes/upload.js";
+import { safeUnlink } from "../core/includes/safeUnlink.js";
 import express from 'express';
 import axios from 'axios';
 import multer from 'multer';
