@@ -59,7 +59,7 @@ router.post(
 
       /* === NOVITA JSON CALL === */
       const novitaRes = await axios.post(
-        `${NOVITA_BASE_URL}/v3/merge-face/image`,
+        `${NOVITA_BASE_URL}/v3/merge_face`,
         {
           face_image: faceB64,
           image_file: imageB64,
