@@ -33,7 +33,11 @@ function assertEnv() {
 }
 
 // 30 MB upload limit (Novita max)
-const upload = multer({ limits: { fileSize: 30 * 1024 * 1024 } });
+import { makeUploader } from "../core/includes/upload.js";
+import { safeUnlink } from "../core/includes/safeUnlink.js";
+
+const upload = makeUploader(30 * 1024 * 1024);
+
 
 router.post(
   '/generate',
