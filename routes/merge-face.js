@@ -7,6 +7,7 @@ import express from "express";
 import fs from "fs";
 import axios from "axios";
 import AWS from "aws-sdk";
+import FormData from "form-data";
 
 import { makeUploader } from "../core/includes/upload.js";
 import { safeUnlink } from "../core/includes/safeUnlink.js";
@@ -70,6 +71,15 @@ router.post(
         });
       }
 
+      // existuje súbor reálne?
+      if (!fs.existsSync(facePath) || !fs.existsSync(imagePath)) {
+        return res.status(500).json({
+          ok: false,
+          error: "TMP_FILE_MISSING",
+          detail: "Upload súbor sa nenašiel na disku (/tmp).",
+        });
+      }
+
       /* === watermark === */
       const wmStr = String(req.body?.watermark ?? "off").trim().toLowerCase();
       const watermark = !(wmStr === "off" || wmStr === "false" || wmStr === "0" || wmStr === "no");
@@ -89,6 +99,7 @@ router.post(
             ...form.getHeaders(),
           },
           timeout: 60000,
+          maxBodyLength: Infinity,
         }
       );
 
@@ -120,7 +131,7 @@ router.post(
       });
 
     } catch (e) {
-      console.error("merge-face error:", e?.response?.data || e.message);
+      console.error("merge-face error:", e?.response?.data || e?.message || e);
       return res.status(500).json({
         ok: false,
         error: "SERVER_ERROR",
