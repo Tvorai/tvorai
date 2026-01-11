@@ -1,109 +1,132 @@
-import express from "express";
-import fs from "fs";
-import axios from "axios";
-import AWS from "aws-sdk";
+/**
+ * Route: Novita – Merge Face + AWS S3 upload
+ * Mount: app.use('/api/novita/merge-face', mergeFaceRouter)
+ */
 
-import { makeUploader } from "../core/includes/upload.js";
-import { safeUnlink } from "../core/includes/safeUnlink.js";
+import express from 'express';
+import axios from 'axios';
+import multer from 'multer';
+import AWS from 'aws-sdk';
 
 const router = express.Router();
 export default router;
 
+// == NOVITA ==
 const NOVITA_API_KEY  = process.env.NOVITA_API_KEY;
-const NOVITA_BASE_URL = process.env.NOVITA_BASE_URL || "https://api.novita.ai";
-const AWS_BUCKET = process.env.AWS_BUCKET;
+const NOVITA_BASE_URL = process.env.NOVITA_BASE_URL || 'https://api.novita.ai';
 
-function assertEnv() {
-  if (!NOVITA_API_KEY) throw new Error("NOVITA_API_KEY missing");
-  if (!AWS_BUCKET) throw new Error("AWS_BUCKET missing");
-}
-
-/* AWS */
+// == AWS S3 ==
 const S3 = new AWS.S3({
   region: process.env.AWS_REGION,
   accessKeyId: process.env.AWS_ACCESS_KEY,
   secretAccessKey: process.env.AWS_SECRET_KEY,
 });
 
-/* upload (disk → /tmp) */
-const upload = makeUploader(30 * 1024 * 1024);
+const AWS_BUCKET = process.env.AWS_BUCKET;
+
+function assertEnv() {
+  if (!NOVITA_API_KEY) throw new Error('NOVITA_API_KEY missing');
+  if (!process.env.AWS_ACCESS_KEY) throw new Error('AWS_ACCESS_KEY missing');
+  if (!process.env.AWS_SECRET_KEY) throw new Error('AWS_SECRET_KEY missing');
+  if (!process.env.AWS_REGION)     throw new Error('AWS_REGION missing');
+  if (!process.env.AWS_BUCKET)     throw new Error('AWS_BUCKET missing');
+}
+
+// 30 MB upload limit (Novita max)
+const upload = multer({ limits: { fileSize: 30 * 1024 * 1024 } });
 
 router.post(
-  "/generate",
+  '/generate',
   upload.fields([
-    { name: "face_image", maxCount: 1 },
-    { name: "image_file", maxCount: 1 },
+    { name: 'face_image', maxCount: 1 },
+    { name: 'image_file', maxCount: 1 },
   ]),
   async (req, res) => {
-    let facePath, imagePath;
-
     try {
       assertEnv();
 
-      const faceFile  = req.files?.face_image?.[0];
-      const imageFile = req.files?.image_file?.[0];
+      // === 1) načítanie obrázkov ===
+      let faceB64 =
+        req.files?.face_image?.[0]?.buffer?.toString('base64') ||
+        req.body?.face_image_file ||
+        null;
 
-      facePath  = faceFile?.path;
-      imagePath = imageFile?.path;
+      let imgB64 =
+        req.files?.image_file?.[0]?.buffer?.toString('base64') ||
+        req.body?.image_file ||
+        null;
 
-      if (!facePath || !imagePath) {
-        return res.status(400).json({ ok:false, error:"MISSING_IMAGES" });
+      if (!faceB64 || !imgB64) {
+        return res.status(400).json({
+          ok: false,
+          error: 'MISSING_IMAGES',
+          detail: 'face_image + image_file (base64 alebo multipart) sú povinné.'
+        });
       }
 
-      /* === STREAM → BASE64 === */
-      const faceB64  = fs.readFileSync(facePath, { encoding: "base64" });
-      const imageB64 = fs.readFileSync(imagePath, { encoding: "base64" });
+      // === 2) watermark ===
+      const wmStr = String(req.body?.watermark ?? 'off').trim().toLowerCase();
+      const watermark = !(wmStr === 'off' || wmStr === 'false' || wmStr === '0' || wmStr === 'no');
 
-      const wmStr = String(req.body?.watermark ?? "off").toLowerCase();
-      const watermark = !(wmStr === "off" || wmStr === "false" || wmStr === "0");
+      // === 3) volanie Novita ===
+      const payload = {
+        face_image_file: String(faceB64),
+        image_file: String(imgB64),
+        extra: { watermark }
+      };
 
-      /* === NOVITA JSON CALL === */
-      const novitaRes = await axios.post(
-        `${NOVITA_BASE_URL}/v3/merge_face`,
-        {
-          face_image: faceB64,
-          image_file: imageB64,
-          watermark: watermark,
+      const r = await axios.post(`${NOVITA_BASE_URL}/v3/merge-face`, payload, {
+        headers: {
+          Authorization: `Bearer ${NOVITA_API_KEY}`,
+          'Content-Type': 'application/json',
         },
-        {
-          headers: {
-            Authorization: `Bearer ${NOVITA_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          timeout: 60000,
-        }
-      );
+        timeout: 60000,
+      });
 
-      const outB64  = novitaRes?.data?.image_file;
-      const outType = novitaRes?.data?.image_type || "png";
+      const outB64  = r?.data?.image_file || null;
+      const outType = r?.data?.image_type || 'png';
 
       if (!outB64) {
-        return res.status(502).json({ ok:false, error:"NO_IMAGE_FROM_NOVITA" });
+        return res.status(502).json({
+          ok: false,
+          error: 'NO_IMAGE_DATA',
+          detail: 'Novita API nevrátilo image_file.'
+        });
       }
 
-      /* === UPLOAD TO S3 === */
-      const buffer = Buffer.from(outB64, "base64");
-      const key = `merge-face/${Date.now()}.${outType}`;
+      // === 4) upload do AWS S3 ===
+      const fileName = `merge-face_${Date.now()}.${outType}`;
+      const buffer = Buffer.from(outB64, 'base64');
 
       const uploadRes = await S3.upload({
         Bucket: AWS_BUCKET,
-        Key: key,
+        Key: fileName,
         Body: buffer,
         ContentType: `image/${outType}`,
+        ACL: 'public-read',
       }).promise();
 
+      const url = uploadRes.Location; // verejná URL
+
+      // === 5) návrat na WP ===
       return res.json({
         ok: true,
-        url: uploadRes.Location,
+        image_type: outType,
+        image_base64: outB64,
+        data_url: `data:image/${outType};base64,${outB64}`,
+        url, // 🔥 WordPress použije TÚTO URL
       });
 
     } catch (e) {
-      console.error("merge-face error:", e?.response?.data || e);
-      return res.status(500).json({ ok:false, error:"SERVER_ERROR" });
+      const status = e?.status || e?.response?.status || 500;
+      const details = e?.response?.data || e?.message || 'Unknown error';
+      console.error('merge-face error:', status, details);
 
-    } finally {
-      await safeUnlink(facePath);
-      await safeUnlink(imagePath);
+      return res.status(status).json({
+        ok: false,
+        error: 'SERVER_ERROR',
+        details
+      });
     }
   }
 );
