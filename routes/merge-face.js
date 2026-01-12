@@ -122,15 +122,19 @@ router.post(
 
       // === 4) upload do AWS S3 ===
       const fileName = `merge-face_${Date.now()}.${outType}`;
-      const buffer = Buffer.from(outB64, 'base64');
+      const tmpOutPath = `/tmp/merge-face/out_${Date.now()}.${outType}`;
+fs.writeFileSync(tmpOutPath, Buffer.from(outB64, 'base64'));
 
-      const uploadRes = await S3.upload({
-        Bucket: AWS_BUCKET,
-        Key: fileName,
-        Body: buffer,
-        ContentType: `image/${outType}`,
-        ACL: 'public-read',
-      }).promise();
+const uploadRes = await S3.upload({
+  Bucket: AWS_BUCKET,
+  Key: fileName,
+  Body: fs.createReadStream(tmpOutPath),
+  ContentType: `image/${outType}`,
+  ACL: 'public-read',
+}).promise();
+
+fs.unlink(tmpOutPath, () => {});
+
 
       const url = uploadRes.Location;
 
