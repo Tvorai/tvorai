@@ -7,6 +7,9 @@ import express from 'express';
 import axios from 'axios';
 import multer from 'multer';
 import AWS from 'aws-sdk';
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
 
 const router = express.Router();
 export default router;
@@ -32,8 +35,26 @@ function assertEnv() {
   if (!process.env.AWS_BUCKET)     throw new Error('AWS_BUCKET missing');
 }
 
-// 30 MB upload limit (Novita max)
-const upload = multer({ limits: { fileSize: 30 * 1024 * 1024 } });
+// ============================
+// MULTER → DISK (/tmp)
+// ============================
+const uploadDir = '/tmp/merge-face';
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => {
+    const unique = crypto.randomBytes(8).toString('hex');
+    cb(null, `${Date.now()}-${unique}${path.extname(file.originalname)}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 30 * 1024 * 1024 }, // 30 MB
+});
 
 router.post(
   '/generate',
@@ -42,25 +63,30 @@ router.post(
     { name: 'image_file', maxCount: 1 },
   ]),
   async (req, res) => {
+    let facePath, imagePath;
+
     try {
       assertEnv();
 
       // === 1) načítanie obrázkov ===
+      facePath  = req.files?.face_image?.[0]?.path || null;
+      imagePath = req.files?.image_file?.[0]?.path || null;
+
       let faceB64 =
-        req.files?.face_image?.[0]?.buffer?.toString('base64') ||
-        req.body?.face_image_file ||
-        null;
+        facePath
+          ? fs.readFileSync(facePath).toString('base64')
+          : req.body?.face_image_file || null;
 
       let imgB64 =
-        req.files?.image_file?.[0]?.buffer?.toString('base64') ||
-        req.body?.image_file ||
-        null;
+        imagePath
+          ? fs.readFileSync(imagePath).toString('base64')
+          : req.body?.image_file || null;
 
       if (!faceB64 || !imgB64) {
         return res.status(400).json({
           ok: false,
           error: 'MISSING_IMAGES',
-          detail: 'face_image + image_file (base64 alebo multipart) sú povinné.'
+          detail: 'face_image + image_file (base64 alebo multipart) sú povinné.',
         });
       }
 
@@ -72,7 +98,7 @@ router.post(
       const payload = {
         face_image_file: String(faceB64),
         image_file: String(imgB64),
-        extra: { watermark }
+        extra: { watermark },
       };
 
       const r = await axios.post(`${NOVITA_BASE_URL}/v3/merge-face`, payload, {
@@ -90,7 +116,7 @@ router.post(
         return res.status(502).json({
           ok: false,
           error: 'NO_IMAGE_DATA',
-          detail: 'Novita API nevrátilo image_file.'
+          detail: 'Novita API nevrátilo image_file.',
         });
       }
 
@@ -106,7 +132,7 @@ router.post(
         ACL: 'public-read',
       }).promise();
 
-      const url = uploadRes.Location; // verejná URL
+      const url = uploadRes.Location;
 
       // === 5) návrat na WP ===
       return res.json({
@@ -114,7 +140,7 @@ router.post(
         image_type: outType,
         image_base64: outB64,
         data_url: `data:image/${outType};base64,${outB64}`,
-        url, // 🔥 WordPress použije TÚTO URL
+        url,
       });
 
     } catch (e) {
@@ -125,8 +151,13 @@ router.post(
       return res.status(status).json({
         ok: false,
         error: 'SERVER_ERROR',
-        details
+        details,
       });
+
+    } finally {
+      // cleanup /tmp
+      if (facePath) fs.unlink(facePath, () => {});
+      if (imagePath) fs.unlink(imagePath, () => {});
     }
   }
 );
