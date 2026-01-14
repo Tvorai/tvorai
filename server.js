@@ -191,11 +191,16 @@ app.post('/consume', requireInternalToken, async (req, res) => {
   let conn;
   try {
     let { wp_user_id, feature_type, credits_spent, metadata, units } = req.body || {};
-    if (!credits_spent && feature_type) {
+    if (
+  (credits_spent === undefined || credits_spent === null) &&
+  feature_type
+) {
+
       const computed = resolveCost(feature_type, units);
       if (computed != null) credits_spent = computed;
     }
-    if (!wp_user_id || !credits_spent) return res.status(400).json({ error: 'MISSING_FIELDS' });
+    if (!wp_user_id || credits_spent === undefined || credits_spent === null)
+ return res.status(400).json({ error: 'MISSING_FIELDS' });
 
     wp_user_id = Number(wp_user_id);
     credits_spent = Math.max(0, Number(credits_spent));
