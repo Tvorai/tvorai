@@ -12,6 +12,30 @@ import seedreamRouter from './routes/seedream-3-0-txt2img.js';
 import mergeFaceRouter from './routes/merge-face.js';
 import seedream4Router from './routes/seedream-4-0-txt2img.js';
 
+function requireInternalToken(req, res, next) {
+  const tokenFromHeader = req.headers['x-internal-token'];
+  const secret = process.env.TVORAI_SHARED_SECRET;
+
+  if (!secret) {
+    return res.status(500).json({
+      ok: false,
+      error: 'SERVER_MISCONFIGURED',
+      detail: 'Missing TVORAI_SHARED_SECRET',
+    });
+  }
+
+  if (!tokenFromHeader || tokenFromHeader !== secret) {
+    return res.status(403).json({
+      ok: false,
+      error: 'BACKEND_REJECTED',
+      detail: 'Invalid or missing internal token',
+    });
+  }
+
+  next();
+}
+
+
 const app = express();
 app.use(helmet());
 app.use(cors());
