@@ -12,30 +12,6 @@ import seedreamRouter from './routes/seedream-3-0-txt2img.js';
 import mergeFaceRouter from './routes/merge-face.js';
 import seedream4Router from './routes/seedream-4-0-txt2img.js';
 
-function requireInternalToken(req, res, next) {
-  const tokenFromHeader = req.headers['x-internal-token'];
-  const secret = process.env.TVORAI_SHARED_SECRET;
-
-  if (!secret) {
-    return res.status(500).json({
-      ok: false,
-      error: 'SERVER_MISCONFIGURED',
-      detail: 'Missing TVORAI_SHARED_SECRET',
-    });
-  }
-
-  if (!tokenFromHeader || tokenFromHeader !== secret) {
-    return res.status(403).json({
-      ok: false,
-      error: 'BACKEND_REJECTED',
-      detail: 'Invalid or missing internal token',
-    });
-  }
-
-  next();
-}
-
-
 const app = express();
 app.use(helmet());
 app.use(cors());
@@ -132,7 +108,7 @@ async function getOrCreateUserByWpId(conn, wp_user_id, email) {
 }
 
 // ====== WEBHOOK: subscription update ======
-app.post( '/webhook/subscription-update', requireInternalToken, async (req, res) => {
+app.post('/webhook/subscription-update', async (req, res) => {
   const payload = req.body || {};
   let conn;
   try {
@@ -187,20 +163,15 @@ app.post( '/webhook/subscription-update', requireInternalToken, async (req, res)
 });
 
 // ====== CONSUME CREDITS ======
-app.post('/consume', requireInternalToken, async (req, res) => {
+app.post('/consume', async (req, res) => {
   let conn;
   try {
     let { wp_user_id, feature_type, credits_spent, metadata, units } = req.body || {};
-    if (
-  (credits_spent === undefined || credits_spent === null) &&
-  feature_type
-) {
-
+    if (!credits_spent && feature_type) {
       const computed = resolveCost(feature_type, units);
       if (computed != null) credits_spent = computed;
     }
-    if (!wp_user_id || credits_spent === undefined || credits_spent === null)
- return res.status(400).json({ error: 'MISSING_FIELDS' });
+    if (!wp_user_id || !credits_spent) return res.status(400).json({ error: 'MISSING_FIELDS' });
 
     wp_user_id = Number(wp_user_id);
     credits_spent = Math.max(0, Number(credits_spent));
