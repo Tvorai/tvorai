@@ -132,7 +132,7 @@ async function getOrCreateUserByWpId(conn, wp_user_id, email) {
 }
 
 // ====== WEBHOOK: subscription update ======
-app.post('/webhook/subscription-update', async (req, res) => {
+app.post( '/webhook/subscription-update', requireInternalToken, async (req, res) => {
   const payload = req.body || {};
   let conn;
   try {
@@ -187,7 +187,7 @@ app.post('/webhook/subscription-update', async (req, res) => {
 });
 
 // ====== CONSUME CREDITS ======
-app.post('/consume', async (req, res) => {
+app.post('/consume', requireInternalToken, async (req, res) => {
   let conn;
   try {
     let { wp_user_id, feature_type, credits_spent, metadata, units } = req.body || {};
