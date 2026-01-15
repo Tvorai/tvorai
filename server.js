@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import mysql from 'mysql2/promise';
 import 'dotenv/config';
 
+import crypto from 'crypto';
 // ROUTES
 import t2vRouter from './routes/kling-v2-5-turbo-text-to-video.js';
 import i2vRouter from './routes/kling-v2-5-turbo-imagine-i2v.js';
@@ -25,7 +26,7 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME,
   port: process.env.DB_PORT ? Number(process.env.DB_PORT) : 3314,
   waitForConnections: true,
-  connectionLimit: 30,
+  connectionLimit: 10,
   queueLimit: 0,
   ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
   enableKeepAlive: true,
@@ -58,7 +59,7 @@ setInterval(async () => {
 }, 1000 * 60 * 4);
 
 // --- DEBUG endpoint ---
-app.get('/debug/db', async (_req, res) => {
+app.get('/debug/db', requireInternalToken, async (_req, res) => {
   try {
     const conn = await pool.getConnection();
     try {
@@ -108,7 +109,7 @@ async function getOrCreateUserByWpId(conn, wp_user_id, email) {
 }
 
 // ====== WEBHOOK: subscription update ======
-app.post('/webhook/subscription-update', async (req, res) => {
+app.post('/webhook/subscription-update', requireInternalToken, async (req, res) => {
   const payload = req.body || {};
   let conn;
   try {
@@ -163,7 +164,7 @@ app.post('/webhook/subscription-update', async (req, res) => {
 });
 
 // ====== CONSUME CREDITS ======
-app.post('/consume', async (req, res) => {
+app.post('/consume', requireInternalToken, async (req, res) => {
   let conn;
   try {
     let { wp_user_id, feature_type, credits_spent, metadata, units } = req.body || {};
@@ -186,16 +187,23 @@ app.post('/consume', async (req, res) => {
     const [[sub]] = await conn.query('SELECT active FROM subscriptions WHERE user_id = ? LIMIT 1', [userId]);
     if (!sub || !sub.active) { await conn.rollback(); return res.status(403).json({ error: 'SUBSCRIPTION_INACTIVE' }); }
 
-    const [[bal]] = await conn.query('SELECT credits_remaining FROM credit_balances WHERE user_id = ? LIMIT 1', [userId]);
-    if (!bal) { await conn.rollback(); return res.status(404).json({ error: 'BALANCE_NOT_FOUND' }); }
+    const [upd] = await conn.query(
+  'UPDATE credit_balances SET credits_remaining = credits_remaining - ?, updated_at = NOW() WHERE user_id = ? AND credits_remaining >= ?',
+  [credits_spent, userId, credits_spent]
+);
 
-    if (bal.credits_remaining < credits_spent) {
-      await conn.rollback();
-      return res.status(402).json({ error: 'INSUFFICIENT_CREDITS', credits_remaining: bal.credits_remaining });
-    }
-
-    await conn.query('UPDATE credit_balances SET credits_remaining = credits_remaining - ?, updated_at = NOW() WHERE user_id = ?', [credits_spent, userId]);
-    await conn.query(
+if (!upd.affectedRows) {
+  const [[bal]] = await conn.query(
+    'SELECT credits_remaining FROM credit_balances WHERE user_id = ? LIMIT 1',
+    [userId]
+  );
+  await conn.rollback();
+  return res.status(402).json({
+    error: 'INSUFFICIENT_CREDITS',
+    credits_remaining: bal?.credits_remaining ?? 0
+  });
+}
+await conn.query(
       'INSERT INTO usage_logs (user_id, feature_type, credits_spent, metadata) VALUES (?, ?, ?, CAST(? AS JSON))',
       [userId, feature_type || 'generic', credits_spent, JSON.stringify(metadata || { units: units || 1 })]
     );
@@ -215,7 +223,7 @@ app.post('/consume', async (req, res) => {
 });
 
 // ====== USAGE ======
-app.get('/usage/:wp_user_id', async (req, res) => {
+app.get('/usage/:wp_user_id', requireInternalToken, async (req, res) => {
   try {
     const wp_user_id = Number(req.params.wp_user_id);
     const conn = await pool.getConnection();
