@@ -131,15 +131,13 @@ app.post(
     const payload = req.body || {};
     let conn;
     try {
-      const {
-        wp_user_id,
-        email,
-        plan_id,
-        monthly_credit_limit,
-        cycle_start,
-        cycle_end,
-        active
-      } = payload;
+      let wp_user_id = payload.wp_user_id;
+let email = payload.email;
+let plan_id = payload.plan_id;
+let monthly_credit_limit = payload.monthly_credit_limit;
+let cycle_start = payload.cycle_start;
+let cycle_end = payload.cycle_end;
+let active = payload.active;
 
     if (!wp_user_id || plan_id === undefined || monthly_credit_limit === undefined || !cycle_start || !cycle_end) {
       return res.status(400).json({ error: 'MISSING_FIELDS' });
