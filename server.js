@@ -191,7 +191,11 @@ app.post(
 });
 
 // ====== CONSUME CREDITS ======
-app.post('/consume', async (req, res) => {
+app.post(
+  '/consume',
+  requireWebhookSecret,
+  async (req, res) => {
+
   let conn;
   try {
     let { wp_user_id, feature_type, credits_spent, metadata, units } = req.body || {};
