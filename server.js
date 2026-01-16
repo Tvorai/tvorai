@@ -107,12 +107,40 @@ async function getOrCreateUserByWpId(conn, wp_user_id, email) {
   return ins.insertId;
 }
 
-// ====== WEBHOOK: subscription update ======
-app.post('/webhook/subscription-update', async (req, res) => {
-  const payload = req.body || {};
-  let conn;
-  try {
-    let { wp_user_id, email, plan_id, monthly_credit_limit, cycle_start, cycle_end, active } = payload;
+function requireWebhookSecret(req, res, next) {
+  const expected = process.env.WEBHOOK_SECRET;
+
+  if (!expected) {
+    console.error('WEBHOOK_SECRET not set');
+    return res.status(500).json({ error: 'SERVER_MISCONFIG' });
+  }
+
+  const provided = req.get('X-WP-SECRET');
+  if (!provided || provided !== expected) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
+  }
+
+  next();
+}
+
+// ===== WEBHOOK: subscription update =====
+app.post(
+  "/webhook/subscription-update",
+  requireWebhookSecret,
+  async (req, res) => {
+    const payload = req.body || {};
+    let conn;
+    try {
+      const {
+        wp_user_id,
+        email,
+        plan_id,
+        monthly_credit_limit,
+        cycle_start,
+        cycle_end,
+        active
+      } = payload;
+
     if (!wp_user_id || plan_id === undefined || monthly_credit_limit === undefined || !cycle_start || !cycle_end) {
       return res.status(400).json({ error: 'MISSING_FIELDS' });
     }
