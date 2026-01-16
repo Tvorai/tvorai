@@ -203,6 +203,14 @@ app.post(
       const computed = resolveCost(feature_type, units);
       if (computed != null) credits_spent = computed;
     }
+    
+    console.log('COST DEBUG', {
+  wp_user_id,
+  feature_type,
+  units,
+  credits_spent
+});
+
     if (!wp_user_id || !credits_spent) return res.status(400).json({ error: 'MISSING_FIELDS' });
 
     wp_user_id = Number(wp_user_id);
