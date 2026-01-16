@@ -218,15 +218,21 @@ app.post(
     const [[sub]] = await conn.query('SELECT active FROM subscriptions WHERE user_id = ? LIMIT 1', [userId]);
     if (!sub || !sub.active) { await conn.rollback(); return res.status(403).json({ error: 'SUBSCRIPTION_INACTIVE' }); }
 
-    const [[bal]] = await conn.query('SELECT credits_remaining FROM credit_balances WHERE user_id = ? LIMIT 1', [userId]);
-    if (!bal) { await conn.rollback(); return res.status(404).json({ error: 'BALANCE_NOT_FOUND' }); }
+    const [result] = await conn.query(
+  `
+  UPDATE credit_balances
+  SET credits_remaining = credits_remaining - ?, updated_at = NOW()
+  WHERE user_id = ?
+    AND credits_remaining >= ?
+  `,
+  [credits_spent, userId, credits_spent]
+);
 
-    if (bal.credits_remaining < credits_spent) {
-      await conn.rollback();
-      return res.status(402).json({ error: 'INSUFFICIENT_CREDITS', credits_remaining: bal.credits_remaining });
-    }
+if (result.affectedRows === 0) {
+  await conn.rollback();
+  return res.status(402).json({ error: 'INSUFFICIENT_CREDITS' });
+}
 
-    await conn.query('UPDATE credit_balances SET credits_remaining = credits_remaining - ?, updated_at = NOW() WHERE user_id = ?', [credits_spent, userId]);
     await conn.query(
       'INSERT INTO usage_logs (user_id, feature_type, credits_spent, metadata) VALUES (?, ?, ?, CAST(? AS JSON))',
       [userId, feature_type || 'generic', credits_spent, JSON.stringify(metadata || { units: units || 1 })]
