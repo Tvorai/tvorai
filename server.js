@@ -210,7 +210,9 @@ app.post(
     conn = await pool.getConnection();
     await conn.beginTransaction();
 
-    const userId = await getOrCreateUserByWpId(conn, wp_user_id, null);
+    const [[userRow]] = await conn.query('SELECT id FROM users WHERE wp_user_id = ? LIMIT 1', [wp_user_id]);
+    if (!userRow) { await conn.rollback(); return res.status(404).json({ error: 'USER_NOT_FOUND' }); }
+    const userId = userRow.id;
 
     const [[sub]] = await conn.query('SELECT active FROM subscriptions WHERE user_id = ? LIMIT 1', [userId]);
     if (!sub || !sub.active) { await conn.rollback(); return res.status(403).json({ error: 'SUBSCRIPTION_INACTIVE' }); }
