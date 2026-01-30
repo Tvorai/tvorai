@@ -166,14 +166,16 @@ let active = payload.active;
     );
 
     await conn.query(
-      `INSERT INTO credit_balances (user_id, cycle_start, credits_remaining, updated_at)
-       VALUES (?, ?, ?, NOW())
-       ON DUPLICATE KEY UPDATE
-         cycle_start = VALUES(cycle_start),
-         credits_remaining = VALUES(credits_remaining),
-         updated_at = NOW()`,
-      [userId, cycle_start, monthly_credit_limit]
-    );
+  `INSERT INTO credit_balances (user_id, user_email, cycle_start, credits_remaining, updated_at)
+   VALUES (?, ?, ?, ?, NOW())
+   ON DUPLICATE KEY UPDATE
+     user_email = VALUES(user_email),
+     cycle_start = VALUES(cycle_start),
+     credits_remaining = VALUES(credits_remaining),
+     updated_at = NOW()`,
+  [userId, email, cycle_start, monthly_credit_limit]
+);
+
 
     await conn.commit();
     res.json({ ok: true, user_id: userId });
